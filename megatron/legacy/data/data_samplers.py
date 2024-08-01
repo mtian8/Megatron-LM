@@ -138,7 +138,6 @@ class MegatronPretrainingRandomSampler:
             self.micro_batch_size * data_parallel_size
         self.last_batch_size = \
             self.total_samples % self.micro_batch_times_data_parallel_size
-
         # Sanity checks.
         assert self.total_samples > 0, \
             'no sample to consume: {}'.format(self.total_samples)
@@ -156,7 +155,6 @@ class MegatronPretrainingRandomSampler:
         self.epoch = self.consumed_samples // active_total_samples
         current_epoch_samples = self.consumed_samples % active_total_samples
         assert current_epoch_samples % self.micro_batch_times_data_parallel_size == 0
-
         if isinstance(self.dataset, RandomSeedDataset):
             self.dataset.set_epoch(self.epoch)
 
@@ -181,11 +179,11 @@ class MegatronPretrainingRandomSampler:
                 torch.randperm(full_bucket_size, generator=g).tolist()
             idx_range_active = idx_range_total[full_bucket_offset:]
             idx_range = idx_range_active[self.data_parallel_rank::self.data_parallel_size]
-
         batch = []
         # Last batch if not complete will be dropped.
         for idx in idx_range:
             batch.append(idx)
+            
             if len(batch) == self.micro_batch_size:
                 self.consumed_samples += self.micro_batch_times_data_parallel_size
                 yield batch
