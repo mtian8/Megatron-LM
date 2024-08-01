@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 import base64
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, OrderedDict
 
 import types
 
@@ -567,6 +567,13 @@ def create_llama3_tokenizer(*args, **kwargs):
     class _Llama3Tokenizer(Llama3Tokenizer):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
+            self.unique_identifiers = OrderedDict()
+            self.unique_identifiers["class"] = type(self).__name__
+            self.unique_identifiers["tokenizer_path"] = args if len(args) > 0 else ["n/a"]
+            for option in kwargs:
+                self.unique_identifiers[option] = str(kwargs[option])
+
+            self.unique_description = json.dumps(self.unique_identifiers, indent=4)
 
         def instruct_tokenize(self, s: str, bos=True, eos=False):
             '''Default args for text completion, not chat/dialog.'''
