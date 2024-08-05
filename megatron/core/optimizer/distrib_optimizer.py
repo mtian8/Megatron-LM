@@ -17,9 +17,12 @@ except ImportError:
     try:
         from apex.optimizers import FusedAdam as Adam
     except ImportError:
+        from torch.optim import Adam
+
         HAVE_APEX_OR_TE = False
 
 from .. import parallel_state, tensor_parallel
+from ..config_logger import has_config_logger_enabled, log_config_to_disk
 from ..dist_checkpointing import ShardedTensor
 from ..dist_checkpointing.dict_utils import nested_values
 from ..dist_checkpointing.mapping import (
@@ -407,6 +410,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                 distributed checkpointing logic).
         """
 
+        if has_config_logger_enabled(config):
+            log_config_to_disk(config, locals(), prefix=type(self).__name__)
+
         assert (
             HAVE_APEX_OR_TE
         ), f'Please install Apex or Transformer Engine to use DistributedOptimizer.'
@@ -560,14 +566,22 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         checkpoint file by calling 'save_parameter_state()'.
         """
 
+        inner_state_dict = self.optimizer.state_dict()
         state_dict = {}
 
+        # Extract 'step', for non-Apex/TE support.
+        if not HAVE_APEX_OR_TE:
+            steps = list(set([s["step"].item() for s in inner_state_dict["state"].values()]))
+            assert len(steps) == 1
+            step = steps[0]
+
         # Optimizer state (do not store parameter state here).
-        state_dict['optimizer'] = {
-            k: v for k, v in self.optimizer.state_dict().items() if k != "state"
-        }
+        state_dict['optimizer'] = {k: v for k, v in inner_state_dict.items() if k != "state"}
         for param_group in state_dict["optimizer"]["param_groups"]:
             del param_group["params"]
+            if not HAVE_APEX_OR_TE:
+                # Native PyTorch param group requires step (i.e., iteration).
+                param_group["step"] = step
 
         # Grad scaler state.
         if self.grad_scaler:
@@ -653,6 +667,16 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         # Sort by state order (see method docstring for details).
         state_dict_state.sort(key=lambda s: s[0])
         state_dict_state = {s[0]: s[1] for s in state_dict_state}
+
+        # Extract 'step', for non-Apex/TE support.
+        if not HAVE_APEX_OR_TE:
+            steps = list(set([g["step"] for g in state_dict["optimizer"]["param_groups"]]))
+            assert len(steps) == 1
+            step = torch.tensor(steps[0], dtype=torch.float)
+
+            for s in state_dict_state.values():
+                # Native PyTorch state dict requires step (i.e., iteration).
+                s["step"] = step
 
         # Optimizer.
         self.optimizer.load_state_dict(

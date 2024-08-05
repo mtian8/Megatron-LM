@@ -1,8 +1,12 @@
 workflow:
   rules:
+    - if: $CI_PROJECT_NAMESPACE != "ADLR"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "schedule"
       variables:
         FUNCTIONAL_TEST: "yes"
+        UNIT_TEST_TIMEOUT: 180
+        UNIT_TEST_REPEAT: 10
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       variables:
@@ -29,11 +33,15 @@ workflow:
 
 stages:
   - build
-  - unit_tests
+  - test 
   - functional_tests
 
 default:
   interruptible: true
+
+include:
+  - jet-tests.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
 
 variables:
   FUNCTIONAL_TEST: 
@@ -65,6 +73,8 @@ variables:
   CI_MCORE_IMAGE: ${GITLAB_ENDPOINT}:5005/adlr/megatron-lm/mcore_ci
   CI_NEMO_IMAGE: ${GITLAB_ENDPOINT}:5005/adlr/megatron-lm/nemo_ci
   LINTING_IMAGE: ${GITLAB_ENDPOINT}:5005/adlr/megatron-lm/mcore_linting
+  UNIT_TEST_TIMEOUT: 15
+  UNIT_TEST_REPEAT: 1
   
 metadata:
   image: python:3.10
@@ -175,7 +185,6 @@ build_image:
   tags:
     - 8xL40S-builder
   image: docker:26.1.4-dind
-  needs: []  # May start ASAP
   stage: build
   timeout: 45m
   parallel:
@@ -192,6 +201,8 @@ build_image:
   before_script:
     - echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  variables:
+    STAGE: main
   script:
     - |
       set -x
@@ -213,8 +224,11 @@ build_image:
       fi
 
       docker build \
+        --secret id=JET_INDEX_URLS \
+        --target $STAGE \
         -f $FILE \
         -t ${IMAGE}:${CI_PIPELINE_ID} \
+        --build-arg CACHEBUST=$(cat /proc/sys/kernel/random/uuid) \
         --cache-to type=inline \
         --cache-from type=registry,ref=${IMAGE}:buildcache \
         --build-arg FROM_IMAGE_NAME=$BASE_IMAGE \
@@ -236,36 +250,29 @@ build_image:
 
 unit_tests:
   image: ${CI_MCORE_IMAGE}:${CI_PIPELINE_ID}
-  stage: unit_tests
+  stage: test
   needs: [build_image]
+  timeout: 180m
   tags:
     - 8xL40S
   rules:
     - if: '$FUNCTIONAL_TEST == "no" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME != $CI_DEFAULT_BRANCH && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME !~ /^core_r/)'
       allow_failure: true
     - when: always
-  parallel:
-    matrix:
-      - DIR: 
-        - data
-        - dist_checkpointing
-        - distributed
-        - fusions
-        - inference
-        - models
-        - pipeline_parallel
-        - tensor_parallel
-        - transformer
-        - '*.py'
   script:
-    - torchrun --nproc_per_node=8 -m pytest -x -v -s --cov-report=term --cov-report=html --cov=megatron/core --no-cov-on-fail tests/unit_tests/$DIR
+    - |
+      for i in $(seq $UNIT_TEST_REPEAT); do
+        SEED=$((RANDOM % 9000 + 1000));
+        timeout ${UNIT_TEST_TIMEOUT}m torchrun --nproc_per_node=8 -m pytest --random-order --random-order-seed ${SEED} -xvs --cov-report=term --cov-report=html --cov=megatron/core --no-cov-on-fail tests/unit_tests
+      done
+      
   artifacts:
     paths:
       - coverage
 
 docs_build_test:
   image: ${GITLAB_ENDPOINT}:5005/adlr/megatron-lm/python-format:0.0.1
-  stage: unit_tests
+  stage: test
   tags:
     - mcore-docker-node-small
   script:
@@ -283,7 +290,7 @@ formatting:
   image: ${LINTING_IMAGE}:${CI_PIPELINE_ID}
   tags:
     - mcore-docker-node-small
-  stage: unit_tests
+  stage: test
   before_script:
     - git fetch origin main
   script:
@@ -299,7 +306,7 @@ copyright:
   image: ${LINTING_IMAGE}:${CI_PIPELINE_ID}
   tags:
     - mcore-docker-node-small
-  stage: unit_tests
+  stage: test
   before_script:
     - git fetch origin main
   script:
@@ -311,11 +318,31 @@ copyright:
     - when: always
   interruptible: true
 
-include:
-  - jet-tests.yml
+secret_detection_check:
+  extends: secret_detection # Is from the template - Secret-Detection.gitlab-ci.yml
+  stage: test
+  tags:
+    - mcore-docker-node-small
+  rules:  # This is required because the template sets rules do not work for us.
+    - when: always
+  before_script:  # JQ to parse the parse JSON report generated 
+    - apk add jq
+  allow_failure: false
+  script:
+    - !reference [secret_detection, script]  # Source the script from the template
+    - echo "Secret detection Report can be downloaded from the Merge Request"
+    - echo -e "\n\n\n\n\n############# Printing Secret Detection Report#####################################################"
+    - echo -e "#############Looks for the vulnerabilities JSON section##################################################### \n\n\n\n\n"
+    - cat gl-secret-detection-report.json | jq '.'
+    # Parse to find vulnerabilities JSON key
+    - |
+      if [[ $(cat gl-secret-detection-report.json | jq '.vulnerabilities | length > 0') == true ]]; then 
+        echo "Atleast one vulnerability has been found"
+        exit 1
+      fi
 
 convergence-test:
-  stage: unit_tests
+  stage: test
   needs: [build_image]
   tags:
     - ${TAG}
@@ -369,3 +396,4 @@ convergence-test:
 
       env
       bash tests/functional_tests/shell_test_utils/run_ci_test_locally.sh
+  

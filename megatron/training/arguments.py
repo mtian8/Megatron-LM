@@ -48,6 +48,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     parser = _add_retro_args(parser)
     parser = _add_experimental_args(parser)
     parser = _add_one_logger_args(parser)
+    parser = _add_config_logger_args(parser)
 
     # Custom arguments.
     if extra_args_provider is not None:
@@ -176,13 +177,13 @@ def validate_args(args, defaults={}):
     )
 
     # Checks.
-    model_parallel_size = args.pipeline_model_parallel_size * \
+    model_parallel_size = (args.encoder_pipeline_model_parallel_size + args.pipeline_model_parallel_size) * \
                           args.tensor_model_parallel_size
     assert args.world_size % (model_parallel_size * args.context_parallel_size) == 0, \
         'world size ({}) is not divisible by tensor parallel size ({}) times ' \
-        'pipeline parallel size ({}) times context parallel size ({})'.format(
+        'pipeline parallel size (encoder+decoder) ({}+{}) times context parallel size ({})'.format(
         args.world_size, args.tensor_model_parallel_size,
-        args.pipeline_model_parallel_size, args.context_parallel_size)
+        args.encoder_pipeline_model_parallel_size, args.pipeline_model_parallel_size, args.context_parallel_size)
     args.data_parallel_size = args.world_size // (model_parallel_size * args.context_parallel_size)
     if args.rank == 0:
         print('using world size: {}, data-parallel size: {}, '
@@ -194,15 +195,11 @@ def validate_args(args, defaults={}):
                   args.tensor_model_parallel_size,
                   args.pipeline_model_parallel_size), flush=True)
 
+    # backwards compatibility.
     if args.pipeline_model_parallel_split_rank is not None:
         args.encoder_pipeline_model_parallel_size = args.pipeline_model_parallel_split_rank
-
-    if args.pipeline_model_parallel_size > 1:
-        if args.encoder_pipeline_model_parallel_size is not None:
-            assert args.encoder_pipeline_model_parallel_size < \
-                    args.pipeline_model_parallel_size, 'encoder pipeline size needs '\
-                    ' to be less than pipeline model parallel size ({})'.format(
-                            args.pipeline_model_parallel_size)
+        args.pipeline_model_parallel_size -= args.encoder_pipeline_model_parallel_size
+        assert args.pipeline_model_parallel_size > 0
 
     if args.tp_comm_overlap:
         assert args.sequence_parallel == True, 'Tensor parallel communication/GEMM overlap can happen only when sequence parallelism is enabled'
@@ -564,7 +561,6 @@ def validate_args(args, defaults={}):
     # Deterministic mode
     if args.deterministic_mode:
         assert not args.use_flash_attn, "Flash attention can not be used in deterministic mode."
-        assert args.num_experts is None, "MoEs are currently not deterministic."
         assert not args.cross_entropy_loss_fusion, "Cross Entropy Fusion is currently not deterministic."
 
         all_reduce_choices = ["Tree", "Ring", "CollnetDirect", "CollnetChain", "^NVLS"]
@@ -650,6 +646,7 @@ def core_transformer_config_from_args(args, config_class=None):
         kw_args['num_query_groups'] = args.num_query_groups
     else:
         kw_args['num_query_groups'] = None
+    kw_args['config_logger_dir'] = args.config_logger_dir
 
     # Return config.
     return config_class(**kw_args)
@@ -874,6 +871,13 @@ def _add_one_logger_args(parser):
                        'part of. It will be used to track the changes in the '
                        'application side which might change the performance '
                        'baseline')
+    return parser
+
+def _add_config_logger_args(parser):
+    group = parser.add_argument_group(title='config logger')
+    group.add_argument('--config-logger-dir', type=str, default='',
+                       help='If set, will dump all configs to --config-logger-dir',
+                       dest='config_logger_dir')
     return parser
 
 def _add_logging_args(parser):
@@ -1419,8 +1423,9 @@ def _add_distributed_args(parser):
                        help='Degree of tensor model parallelism.')
     group.add_argument('--pipeline-model-parallel-size', type=int, default=1,
                        help='Degree of pipeline model parallelism.')
-    group.add_argument('--encoder-pipeline-model-parallel-size', type=int, default=None,
-                       help='Degree of pipeline model parallelism in the encoder.')
+    group.add_argument('--encoder-pipeline-model-parallel-size', type=int, default=0,
+                       help=('Degree of pipeline model parallelism in the encoder. This is '
+                             'independent of the amount of pipeline in the decoder.'))
     group.add_argument('--pipeline-model-parallel-split-rank',
                        type=int, default=None,
                        help=('Rank where encoder and decoder should be split. '
@@ -1764,9 +1769,9 @@ def _add_moe_args(parser):
     group.add_argument('--moe-router-topk', type=int, default=2,
                        help='Number of experts to route to for each token. The default is 2.')
     group.add_argument('--moe-router-pre-softmax', action='store_true',
-                       help='Enable pre-softmax routing for MoE, which means the top-k selection is before the softmax. By default, top-k is done after the softmax.')
+                       help='Enable pre-softmax routing for MoE, which means softmax is before the top-k selection. By default, softmax is done after top-k.')
     group.add_argument('--moe-grouped-gemm', action='store_true',
-                       help='When there are multiple experts per rank, compress multiple local (potentially small) gemms in a single kernel launch to improve the utilization and performance by leveraging the Grouped GEMM feature introduced since CUTLASS 2.8 (https://github.com/fanshiqing/grouped_gemm).')
+                       help='When there are multiple experts per rank, launch multiple local GEMM kernels in multiple streams to improve the utilization and performance with GroupedLinear in TransformerEngine.')
     group.add_argument('--moe-aux-loss-coeff', type=float, default=0.0,
                        help='Scaling coefficient for the aux loss: a starting value of 1e-2 is recommended.')
     group.add_argument('--moe-z-loss-coeff', type=float, default=None,
