@@ -49,6 +49,8 @@ _PIPELINE_MODEL_PARALLEL_DECODER_START = None
 _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE = None
 _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = None
 _MPU_EXPERT_MODEL_PARALLEL_WORLD_SIZE = None
+_MPU_DATA_PARALLEL_WORLD_SIZE = None
+_MPU_DATA_PARALLEL_RANK = None
 _MPU_TENSOR_MODEL_PARALLEL_RANK = None
 _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
 _MPU_EXPERT_MODEL_PARALLEL_RANK = None
@@ -342,7 +344,7 @@ def initialize_model_parallel(
     nccl_communicator_config_path: Optional[str] = None,
     distributed_timeout_minutes: int = 30,
     order: str = "tp-cp-ep-dp-pp",
-    encoder_pipeline_model_parallel_size: Optional[int] = None,
+    encoder_pipeline_model_parallel_size: Optional[int] = 0,
     get_embedding_ranks: Optional[Callable[[List[int], Optional[int]], List[int]]] = None,
     get_position_embedding_ranks: Optional[Callable[[List[int], Optional[int]], List[int]]] = None,
 ) -> None:
@@ -433,11 +435,11 @@ def initialize_model_parallel(
             The rank initialization order of parallelism. Now we support
             tp-dp-pp and tp-pp-dp orders.
 
-        encoder_pipeline_model_parallel_size (int, optional):
-            The number of tensor parallel GPU groups to allocate to the encoder. Must be
-            smaller than pipeline_model_parallel_size. As an example, if pipeline_model_parallel_size is 4
-            and encoder_pipeline_model_parallel_size is 2, then the encoder will use the first two pipeline
-            stages for its layers.
+        encoder_pipeline_model_parallel_size (int, default = 0):
+            The number of tensor parallel GPU groups to allocate to the encoder. As an example,
+            if pipeline_model_parallel_size is 4 and encoder_pipeline_model_parallel_size is 2,
+            then the encoder will use the first two pipeline stages for its layers, and the total
+            amount of pipelineing is 6.
 
         get_embedding_ranks (Callable[[List[int], Optional[int]], List[int]], optional, default=None):
             A function that takes in a list of ranks for a pipeline group and returns
@@ -464,6 +466,9 @@ def initialize_model_parallel(
     ranks 8 to 15 belong to the second box.
 
     """
+    if encoder_pipeline_model_parallel_size is None:
+        encoder_pipeline_model_parallel_size = 0
+
     if get_embedding_ranks is None:
         get_embedding_ranks = partial(
             default_embedding_ranks, split_rank=pipeline_model_parallel_split_rank
@@ -474,7 +479,7 @@ def initialize_model_parallel(
             default_position_embedding_ranks, split_rank=pipeline_model_parallel_split_rank
         )
 
-    if encoder_pipeline_model_parallel_size is not None:
+    if encoder_pipeline_model_parallel_size > 0:
         global _PIPELINE_MODEL_PARALLEL_DECODER_START
         _PIPELINE_MODEL_PARALLEL_DECODER_START = encoder_pipeline_model_parallel_size
 
@@ -482,19 +487,17 @@ def initialize_model_parallel(
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
 
-    if (
-        world_size
-        % (tensor_model_parallel_size * pipeline_model_parallel_size * context_parallel_size)
-        != 0
-    ):
+    total_pipelining = encoder_pipeline_model_parallel_size + pipeline_model_parallel_size
+
+    if world_size % (tensor_model_parallel_size * total_pipelining * context_parallel_size) != 0:
         raise RuntimeError(
             f"world_size ({world_size}) is not divisible by tensor_model_parallel_size "
-            f"({tensor_model_parallel_size}) x pipeline_model_parallel_size ({pipeline_model_parallel_size}) "
+            f"({tensor_model_parallel_size}) x total_pipelining ({encoder_pipeline_model_parallel_size=} + {pipeline_model_parallel_size=}) "
             f"x context_parallel_size ({context_parallel_size})"
         )
 
     data_parallel_size: int = world_size // (
-        tensor_model_parallel_size * pipeline_model_parallel_size * context_parallel_size
+        tensor_model_parallel_size * total_pipelining * context_parallel_size
     )
 
     if data_parallel_size % expert_model_parallel_size != 0:
@@ -535,7 +538,7 @@ def initialize_model_parallel(
         tp=tensor_model_parallel_size,
         ep=expert_model_parallel_size,
         dp=data_parallel_size,
-        pp=pipeline_model_parallel_size,
+        pp=total_pipelining,
         cp=context_parallel_size,
         order=order,
     )
@@ -1236,6 +1239,9 @@ def get_pipeline_model_parallel_prev_rank():
 
 def get_data_parallel_world_size(with_context_parallel=False):
     """Return world size for the data parallel group."""
+    global _MPU_DATA_PARALLEL_WORLD_SIZE
+    if _MPU_DATA_PARALLEL_WORLD_SIZE is not None:
+        return _MPU_DATA_PARALLEL_WORLD_SIZE
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         return torch.distributed.get_world_size(
             group=get_data_parallel_group(with_context_parallel=with_context_parallel)
@@ -1244,8 +1250,17 @@ def get_data_parallel_world_size(with_context_parallel=False):
         return 0
 
 
+def set_data_parallel_rank(rank):
+    """Return world size for the data parallel group."""
+    global _MPU_DATA_PARALLEL_RANK
+    _MPU_DATA_PARALLEL_RANK = rank
+
+
 def get_data_parallel_rank(with_context_parallel=False):
     """Return my rank for the data parallel group."""
+    global _MPU_DATA_PARALLEL_RANK
+    if _MPU_DATA_PARALLEL_RANK is not None:
+        return _MPU_DATA_PARALLEL_RANK
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         return torch.distributed.get_rank(
             group=get_data_parallel_group(with_context_parallel=with_context_parallel)
@@ -1362,6 +1377,17 @@ def destroy_global_memory_buffer():
     _GLOBAL_MEMORY_BUFFER = None
 
 
+def get_all_ranks():
+    ranks = [
+        get_tensor_model_parallel_rank(),
+        get_data_parallel_rank(),
+        get_context_parallel_rank(),
+        get_pipeline_model_parallel_rank(),
+        get_expert_model_parallel_rank(),
+    ]
+    return '_'.join(map(lambda x: str(x or 0), ranks))
+
+
 def get_moe_layer_wise_logging_tracker():
     """Return the moe layer wise tracker."""
     global _MOE_LAYER_WISE_LOGGING_TRACKER
@@ -1372,61 +1398,94 @@ def destroy_model_parallel():
     """Set the groups to none."""
     global _MODEL_PARALLEL_GROUP
     _MODEL_PARALLEL_GROUP = None
+
     global _MODEL_AND_EXPERT_PARALLEL_GROUP
     _MODEL_AND_EXPERT_PARALLEL_GROUP = None
+
     global _TENSOR_MODEL_PARALLEL_GROUP
     _TENSOR_MODEL_PARALLEL_GROUP = None
+
     global _PIPELINE_MODEL_PARALLEL_GROUP
     _PIPELINE_MODEL_PARALLEL_GROUP = None
+
     global _DATA_PARALLEL_GROUP
     _DATA_PARALLEL_GROUP = None
+
     global _DATA_PARALLEL_GROUP_WITH_CP
     _DATA_PARALLEL_GROUP_WITH_CP = None
+
     global _CONTEXT_PARALLEL_GROUP
     _CONTEXT_PARALLEL_GROUP = None
+
     global _CONTEXT_PARALLEL_GLOBAL_RANKS
     _CONTEXT_PARALLEL_GLOBAL_RANKS = None
+
     global _EMBEDDING_GROUP
     _EMBEDDING_GROUP = None
+
     global _POSITION_EMBEDDING_GROUP
     _POSITION_EMBEDDING_GROUP = None
+
     global _TENSOR_AND_DATA_PARALLEL_GROUP
     _TENSOR_AND_DATA_PARALLEL_GROUP = None
+
     global _TENSOR_AND_DATA_PARALLEL_GROUP_WITH_CP
     _TENSOR_AND_DATA_PARALLEL_GROUP_WITH_CP = None
+
     global _TENSOR_AND_CONTEXT_PARALLEL_GROUP
     _TENSOR_AND_CONTEXT_PARALLEL_GROUP = None
+
     global _EXPERT_MODEL_PARALLEL_GROUP
     _EXPERT_MODEL_PARALLEL_GROUP = None
+
     global _TENSOR_AND_EXPERT_PARALLEL_GROUP
     _TENSOR_AND_EXPERT_PARALLEL_GROUP = None
+
     global _DATA_MODULO_EXPERT_PARALLEL_GROUP
     _DATA_MODULO_EXPERT_PARALLEL_GROUP = None
+
     global _DATA_MODULO_EXPERT_PARALLEL_GROUP_WITH_CP
     _DATA_MODULO_EXPERT_PARALLEL_GROUP_WITH_CP = None
+
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = None
+
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = None
+
     global _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE
     _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE = None
+
     global _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = None
+
     global _MPU_TENSOR_MODEL_PARALLEL_RANK
     _MPU_TENSOR_MODEL_PARALLEL_RANK = None
+
     global _MPU_PIPELINE_MODEL_PARALLEL_RANK
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
+
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+
     global _MPU_EXPERT_MODEL_PARALLEL_WORLD_SIZE
     _MPU_EXPERT_MODEL_PARALLEL_WORLD_SIZE = None
+
     global _MPU_EXPERT_MODEL_PARALLEL_RANK
     _MPU_EXPERT_MODEL_PARALLEL_RANK = None
+
     global _DATA_PARALLEL_GROUP_GLOO
+    if _DATA_PARALLEL_GROUP_GLOO is not None:
+        torch.distributed.destroy_process_group(_DATA_PARALLEL_GROUP_GLOO)
     _DATA_PARALLEL_GROUP_GLOO = None
+
     global _DATA_PARALLEL_GROUP_WITH_CP_GLOO
     _DATA_PARALLEL_GROUP_WITH_CP_GLOO = None
+
     global _DATA_MODULO_EXPERT_PARALLEL_GROUP_GLOO
+    if _DATA_MODULO_EXPERT_PARALLEL_GROUP_GLOO is not None:
+        torch.distributed.destroy_process_group(_DATA_MODULO_EXPERT_PARALLEL_GROUP_GLOO)
     _DATA_MODULO_EXPERT_PARALLEL_GROUP_GLOO = None
+
     global _DATA_MODULO_EXPERT_PARALLEL_GROUP_WITH_CP_GLOO
     _DATA_MODULO_EXPERT_PARALLEL_GROUP_WITH_CP_GLOO = None
