@@ -130,11 +130,18 @@ def get_batch(data_iterator):
     labels = tokens_.view(-1)
     labels = labels[1:] # Remove the first token.
     # add the last token
-    labels = torch.cat([labels, torch.ones_like(labels[0:1])*(128009)], dim=0) # NOTE: THIS IS FOR LLAMA3 ONLY!!
+    eos_token_mistral = 2  # NOTE: THIS IS FOR MISTRAL ONLY!!
+    eos_token_llama3 = 128009  # NOTE: THIS IS FOR LLAMA3 ONLY!!
+    eos_token = eos_token_llama3 
+    labels = torch.cat([labels, torch.ones_like(labels[0:1])*(eos_token)], dim=0) 
     labels = labels.reshape_as(tokens_)
     # tokens_ = torch.cat([pad_token.unsqueeze(1), tokens_], dim=1)
     labels = labels.contiguous()
     tokens = tokens_.contiguous()
+    
+    # tokenizer = get_tokenizer()
+    # print("TOKENS", tokens[0, :40]) #, tokenizer.decode(tokens[0, :40]))
+    # print("LABELS", labels[0, :40]) #, tokenizer.decode(labels[0, :40]))
     # print("RUA",tokens.shape, labels.shape)
 
     # Get the masks and postition ids.
@@ -291,7 +298,12 @@ def instruction_train_valid_test_datasets_provider(num_samples):
         if len(columns) > 0:
             train_ds = train_ds.remove_columns(columns)
     except Exception:
-        train_ds = datasets.load_from_disk(args.data_path[0])['train']
+        
+        train_ds = datasets.load_from_disk(args.data_path[0])
+        try:
+            train_ds = train_ds['train']
+        except Exception:
+            pass
     train_ds = train_ds.with_format("np")
 
     # streaming data does not have length
