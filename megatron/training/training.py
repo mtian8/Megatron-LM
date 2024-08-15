@@ -34,8 +34,13 @@ from megatron.training.initialize import set_jit_fusion_options
 from megatron.training.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.legacy.data.data_samplers import build_pretraining_data_loader
 from megatron.core.transformer.moe.moe_utils import track_moe_metrics
+from megatron.core.parallel_state import (
+    destroy_global_memory_buffer,
+    destroy_model_parallel,
+)
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.num_microbatches_calculator import (
+    destroy_num_microbatches_calculator,
     get_current_global_batch_size,
     get_current_running_global_batch_size,
     get_num_microbatches,
@@ -54,6 +59,7 @@ from .utils import (
     update_use_dist_ckpt,
 )
 from .global_vars import (
+    destroy_global_vars,
     get_args,
     get_signal_handler,
     get_timers,
@@ -65,6 +71,13 @@ from . import one_logger_utils
 from . import ft_integration
 
 stimer = StragglerDetector()
+
+def destroy_global_state():
+    destroy_global_vars()
+    destroy_num_microbatches_calculator()
+    destroy_global_memory_buffer()
+    destroy_model_parallel()
+    
 
 def print_datetime(string):
     """Note that this call will sync across all ranks."""
@@ -1162,7 +1175,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         num_floating_point_operations_so_far += num_fp_ops
         total_flops += num_fp_ops
 
-        # Fault tolerance
+        # Send heartbeat to FT package and update timeouts.
         if args.enable_ft_package:
             ft_client = ft_integration.get_rank_monitor_client(
                 ft_integration.StateMachineActions.TRAIN_HEARTBEAT)
@@ -1176,6 +1189,13 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                         ft_integration.StateMachineActions.UPDATE_TIMEOUT).calculate_and_set_timeouts()
                     print_rank_0(f'Updated FT timeouts. New values: \
                         {ft_integration.get_rank_monitor_client().timeouts}')
+
+        # Bring CPU and GPU back in sync if on right iteration.
+        if (
+            args.train_sync_interval
+            and iteration % args.train_sync_interval == 0
+        ):
+            torch.cuda.synchronize()
 
         # Logging.
         loss_scale = optimizer.get_loss_scale().item()
