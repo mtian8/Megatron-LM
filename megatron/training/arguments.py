@@ -678,7 +678,7 @@ def _add_transformer_engine_args(parser):
     group.add_argument('--transformer-impl', default='transformer_engine',
                        choices=['local', 'transformer_engine'],
                        help='Which Transformer implementation to use.')
-
+    group.add_argument('--window-size', type=int, nargs=2, default=None, help='Sliding window size for local attention')
     return parser
 
 def _add_inference_args(parser):
