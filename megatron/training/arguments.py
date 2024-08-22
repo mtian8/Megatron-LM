@@ -190,10 +190,10 @@ def validate_args(args, defaults={}):
     # Checks.
     if args.rank == 0:
         print('using world size: {}, data-parallel size: {}, '
-              'context-parallel size: {} '
+              'context-parallel size: {}, '
               'tensor-model-parallel size: {}, '
-              'encoder-tensor-model-parallel size: {}'
-              'pipeline-model-parallel size: {} '
+              'encoder-tensor-model-parallel size: {}, '
+              'pipeline-model-parallel size: {}, '
               'encoder-pipeline-model-parallel size: {}'.format(
                   args.world_size, args.data_parallel_size,
                   args.context_parallel_size,
@@ -522,8 +522,6 @@ def validate_args(args, defaults={}):
     if args.decoupled_lr is not None or args.decoupled_min_lr is not None:
         assert not args.use_legacy_models, \
             '--decoupled-lr and --decoupled-min-lr is not supported in legacy models.'
-        if args.load is not None or args.save is not None:
-            assert not args.use_dist_ckpt, "Distributed checkpointing does not work with decoupled LR yet."
 
     # Legacy RoPE arguments
     if args.use_rotary_position_embeddings:
