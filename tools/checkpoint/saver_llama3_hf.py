@@ -1,4 +1,3 @@
-
 import argparse
 from collections.abc import Mapping
 import concurrent.futures
@@ -80,6 +79,10 @@ def save_checkpoint(queue, args):
 
 
     embeddings_msg = queue_get("embeddings")
+    if embeddings_msg["word embeddings"].shape != hf_model.model.embed_tokens.weight.shape:
+        print("Warning: word embeddings shape mismatch: ", embeddings_msg["word embeddings"].shape, hf_model.model.embed_tokens.weight.shape)
+        print("Changing the shape of the embeddings to match")
+        embeddings_msg["word embeddings"] = embeddings_msg["word embeddings"][:hf_model.model.embed_tokens.weight.shape[0]]
     hf_model.model.embed_tokens.weight.copy_(embeddings_msg['word embeddings'])
 
     # recieve
@@ -142,6 +145,10 @@ def save_checkpoint(queue, args):
 
     if md.output_layer:
         output_layer_msg = queue_get("output layer")
+        if output_layer_msg["weight"].shape != hf_model.lm_head.weight.shape:
+            print("Warning: output layer shape mismatch: ", output_layer_msg["weight"].shape, hf_model.lm_head.weight.shape)
+            print("Changing the shape of the output layer to match")
+            output_layer_msg["weight"] = output_layer_msg["weight"][:hf_model.lm_head.weight.shape[0]]
         hf_model.lm_head.weight.copy_(output_layer_msg["weight"])
     else:
         # tied embeddings
