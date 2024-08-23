@@ -296,14 +296,24 @@ def instruction_train_valid_test_datasets_provider(num_samples):
         columns = train_ds.column_names
         columns = [col for col in columns if col != 'input_ids']
         if len(columns) > 0:
-            train_ds = train_ds.remove_columns(columns)
+            train_ds = train_ds.remove_columns(columns) 
     except Exception:
-        
-        train_ds = datasets.load_from_disk(args.data_path[0])
         try:
-            train_ds = train_ds['train']
+            train_ds = datasets.load_from_disk(args.data_path[0])
+            try:
+                train_ds = train_ds['train']
+            except Exception:
+                pass
         except Exception:
-            pass
+            train_ds = datasets.load_dataset(args.data_path[0])
+            try:
+                train_ds = train_ds['train']
+            except Exception:
+                pass
+            columns = train_ds.column_names
+            columns = [col for col in columns if col != 'input_ids']
+            if len(columns) > 0:
+                train_ds = train_ds.remove_columns(columns)
     train_ds = train_ds.with_format("np")
 
     # streaming data does not have length
