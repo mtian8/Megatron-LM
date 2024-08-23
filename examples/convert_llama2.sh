@@ -1,0 +1,12 @@
+python tools/checkpoint/convert.py \
+    --model-type GPT \
+    --loader llama_mistral \
+    --saver mcore \
+    --target-tensor-parallel-size 4 \
+    --target-pipeline-parallel-size 2 \
+    --checkpoint-type hf \
+    --load-dir ../models/Llama-2-7b-hf \
+    --save-dir ../models/MG_llama2_7B_tp_4_pp_2 \
+    --tokenizer-model ../models/Llama-2-7b-hf/tokenizer.model \
+    --model-size llama2-7B \
+    --bf16
