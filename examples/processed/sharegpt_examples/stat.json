@@ -1,0 +1,19 @@
+{
+    "num_samples": 5,
+    "num_concat_samples": 4,
+    "sum_system_prompt_tokens": 120,
+    "sum_question_tokens": 635,
+    "sum_quesiion_count": 17,
+    "avg_question_length": 37.35294117647059,
+    "sum_reply_tokens": 7704,
+    "sum_reply_count": 18,
+    "avg_reply_length": 428.0,
+    "avg_reply_count_per_conversation": 3.6,
+    "avg_question_count_per_conversation": 3.4,
+    "input_files": [
+        "../examples/sharegpt_examples.json"
+    ],
+    "output_dir": "../examples/processed/sharegpt_examples",
+    "total_tokens": 8192,
+    "total_loss_tokens": 7433
+}

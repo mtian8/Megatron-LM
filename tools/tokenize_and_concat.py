@@ -57,38 +57,6 @@ class ConcatTokensDataset(IterableDataset):
                     'loss_mask': concat_loss_mask
                 }
 
-
-def smart_tokenizer_and_embedding_resize(
-        special_tokens_dict,
-        tokenizer,
-        model,
-):
-    """Resize tokenizer and embedding by adding special tokens and averaging the embeddings of the new tokens.
-
-    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
-    """
-    print("Original vocab size: ", tokenizer.vocab_size)
-    print(tokenizer.special_tokens_map)
-    print(special_tokens_dict)
-    tokenizer.add_special_tokens({"additional_special_tokens": []})  # a bug in huggingface tokenizers
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-
-    print(f"Added {num_new_tokens} new tokens to the tokenizer.")
-    # print all the special tokens
-    print(tokenizer.special_tokens_map)
-    if num_new_tokens > 0:
-        model.resize_token_embeddings(tokenizer.vocab_size + num_new_tokens)
-
-        input_embeddings = model.get_input_embeddings().weight.data
-        output_embeddings = model.get_output_embeddings().weight.data
-
-        input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-        input_embeddings[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
-
 DEFAULT_SYSTEM_PROMPT = """You are a helpful and intelligent assistant. Follow the instructions and answer the questions as accurately as possible."""
 CONCAT_LENGTH = 2048
 
@@ -140,11 +108,12 @@ def process_func_base(name, input_files, output_dir):
     }
 
     ###################### tokenizer setup start
-    from transformers import AutoTokenizer, AutoModel
-    tokenizer = AutoTokenizer.from_pretrained("???????????????????????????????????????",  # TODO
+    tokenizer = AutoTokenizer.from_pretrained("/work/nvme/bcbw/mtian8/model/HF_model/Llama-2-7b-hf-add-tokens",  # TODO
                                               trust_remote_code=True)
+    
     # the tokenizer should not add bos and eos tokens, this should be set in the config already
     # just to make sure, we disable the bos and eos tokens again
+    
     assert tokenizer.add_bos_token == False
     assert tokenizer.add_eos_token == False
 
@@ -161,13 +130,13 @@ def process_func_base(name, input_files, output_dir):
     im_end = '<|im_end|>'
     im_end_id = tokenizer.convert_tokens_to_ids(im_end)
 
-    # CrystalCoder tokenizer has the following special tokens:
-    assert bos_token_id == 1
-    assert eos_token_id == 2
-    assert im_start_id == 32018
-    assert im_end_id == 32019
-    assert sys_start_id == 32020
-    assert sys_end_id == 32021
+    # # tokenizer has the following special tokens:
+    # assert bos_token_id == 1
+    # assert eos_token_id == 2
+    # assert im_start_id == 32018
+    # assert im_end_id == 32019
+    # assert sys_start_id == 32020
+    # assert sys_end_id == 32021
 
     ###################### tokenizer setup end
 
@@ -524,9 +493,9 @@ def process_textbooks():
 
 def process_sharegpt_examples():
     input_files = [
-        '../examples/raw/sharegpt_examples.json'
+        '../examples/sharegpt_examples.json'
     ]
-    output_dir = '../processed/sharegpt_examples'
+    output_dir = '../examples/processed/sharegpt_examples'
     process_func_base('sharegpt_examples', input_files, output_dir)
 
 

@@ -25,13 +25,10 @@ def smart_tokenizer_and_embedding_resize(
         model.resize_token_embeddings(tokenizer.vocab_size + num_new_tokens)
 
         input_embeddings = model.get_input_embeddings().weight.data
-        output_embeddings = model.get_output_embeddings().weight.data
 
         input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
 
 
@@ -45,9 +42,6 @@ def update_special_tokens(input_path, output_path, special_tokens_dict):
     os.makedirs(output_path, exist_ok=True)
     tokenizer.save_pretrained(output_path)
     model.save_pretrained(output_path)
-
-smart_tokenizer_and_embedding_resize(special_tokens_dict, tokenizer, model)
-
 
 if __name__ == '__main__':
     special_tokens_dict = {"additional_special_tokens": ['<|sys_start|>', '<|sys_end|>', '<|im_start|>', '<|im_end|>']}
