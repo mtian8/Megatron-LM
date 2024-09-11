@@ -87,7 +87,7 @@ def split_into_paragraphs(text, min_length=200000):
     return paragraphs
 
 
-def process_func_base(name, input_files, output_dir):
+def process_func_base(name, input_files, output_dir, tokenizer_path):
     # print(f'Processing: {name}')
     logger.info('Processing: %s', name)
 
@@ -108,7 +108,7 @@ def process_func_base(name, input_files, output_dir):
     }
 
     ###################### tokenizer setup start
-    tokenizer = AutoTokenizer.from_pretrained("/work/nvme/bcbw/mtian8/model/HF_model/Llama-2-7b-hf-add-tokens",  # TODO
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path,
                                               trust_remote_code=True)
     
     # the tokenizer should not add bos and eos tokens, this should be set in the config already
@@ -245,7 +245,7 @@ def process_func_base(name, input_files, output_dir):
 
         for message in conversations:
             if message['from'] == 'human':
-                # tokenize user utterance
+                # tokenize user uttergit@github.com:mtian8/Megatron-LM.gitance
                 user_utterance_tokenized = [im_start_id] + tokenizer(message['value'], truncation=False, padding=False)[
                     'input_ids'] + [im_end_id]  # <|im_start|> first user utterance <|im_end|>
                 user_utterance_loss_mask = [0] * len(user_utterance_tokenized)  # no loss for user utterance
@@ -327,7 +327,7 @@ def process_func_base(name, input_files, output_dir):
     for document in tqdm(all_documents):
         tokenized_document = process_sample_func(document)
         all_tokenized_documents.append(tokenized_document)
-
+git@github.com:mtian8/Megatron-LM.git
     stats['num_samples'] = len(all_tokenized_documents)
     # print('Number of samples: ', stats['num_samples'])
     logger.info('Number of samples: %s', stats['num_samples'])
@@ -373,7 +373,7 @@ def process_func_base(name, input_files, output_dir):
     logger.info('Stats: %s', stats)
 
     # write to jsonl
-    # print('Writing to jsonl...')
+    #git@github.com:mtian8/Megatron-LM.git print('Writing to jsonl...')
     logger.info('Writing to jsonl...')
 
     os.makedirs(output_dir, exist_ok=True)
@@ -387,6 +387,12 @@ def process_func_base(name, input_files, output_dir):
 
     # print(f'Finished processing: {name}')
     logger.info('Finished processing: %s', name)
+
+process_func_base_full = process_func_base
+
+def prepare_tokenizer(tokenizer_path):
+    global process_func_base
+    process_func_base = partial(process_func_base_full, tokenizer_path=tokenizer_path)
 
 
 def process_slim_orca():
@@ -512,4 +518,7 @@ if __name__ == "__main__":
     # process_program_books()
     # process_textbooks()
     # process_sharegpt()
-    process_sharegpt_examples()
+    prepare_tokenizer(sys.argv[1])  # take tokenizer path from args
+    process_slim_orca()
+    process_codealpaca()
+    process_evol_sharegpt()
