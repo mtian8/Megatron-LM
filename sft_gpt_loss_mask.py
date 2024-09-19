@@ -278,7 +278,7 @@ def instruction_train_valid_test_datasets_provider(num_samples):
         data_files=args.data_path,
         split='train',
         # num_proc=min(len(data_files), os.cpu_count()),
-        cache_dir='./train_cache/' + args.data_path[0].replace('/', '_'),
+        cache_dir='/u/mtian8/.cache/' + args.data_path[0].replace('/', '_'),
     )
     train_ds = train_ds.with_format("np")
 

@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from functools import partial
-import os
 import warnings
 from typing import Dict, Iterable, Union
 import datasets
@@ -20,6 +19,7 @@ import numpy as np
 from torch.utils.data import IterableDataset
 from transformers import PreTrainedTokenizerBase
 import json
+import sys
 
 import logging
 
@@ -327,7 +327,6 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
     for document in tqdm(all_documents):
         tokenized_document = process_sample_func(document)
         all_tokenized_documents.append(tokenized_document)
-git@github.com:mtian8/Megatron-LM.git
     stats['num_samples'] = len(all_tokenized_documents)
     # print('Number of samples: ', stats['num_samples'])
     logger.info('Number of samples: %s', stats['num_samples'])
@@ -451,7 +450,7 @@ def process_evol_sharegpt():
 
 def process_codealpaca():
     input_files = [
-        'raw/code_alpaca_20k.json'
+        'raw/code_alpaca_20k.jsonl'
     ]
     output_dir = 'processed/codealpaca'
     process_func_base('codealpaca', input_files, output_dir)
@@ -519,6 +518,6 @@ if __name__ == "__main__":
     # process_textbooks()
     # process_sharegpt()
     prepare_tokenizer(sys.argv[1])  # take tokenizer path from args
-    process_slim_orca()
+    # process_slim_orca()
     process_codealpaca()
     process_evol_sharegpt()
