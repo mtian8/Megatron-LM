@@ -11,3 +11,6 @@ local/
 scripts/
 log/
 *.out
+core
+processed/
+raw
