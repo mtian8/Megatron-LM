@@ -729,6 +729,9 @@ def _add_transformer_engine_args(parser):
     group.add_argument('--fp8-param-gather', action='store_true',
                        help='Keep the compute param in fp8 (do not use any other intermediate '
                             'dtype) and perform the param all-gather in fp8.')
+    
+    group.add_argument('--window-size', type=int, nargs=2, default=None, 
+                       help='Sliding window size for local attention')
 
     return parser
 
