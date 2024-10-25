@@ -58,7 +58,7 @@ class ConcatTokensDataset(IterableDataset):
                 }
 
 DEFAULT_SYSTEM_PROMPT = """You are a helpful and intelligent assistant. Follow the instructions and answer the questions as accurately as possible."""
-CONCAT_LENGTH = 2048
+CONCAT_LENGTH = int(sys.argv[2])
 
 from transformers import AutoTokenizer
 
@@ -96,7 +96,7 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
         'num_concat_samples': 0,
         'sum_system_prompt_tokens': 0,
         'sum_question_tokens': 0,
-        'sum_quesiion_count': 0,
+        'sum_question_count': 0,
         'avg_question_length': None,
         'sum_reply_tokens': 0,
         'sum_reply_count': 0,
@@ -108,14 +108,13 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
     }
 
     ###################### tokenizer setup start
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path,
-                                              trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
     
     # the tokenizer should not add bos and eos tokens, this should be set in the config already
     # just to make sure, we disable the bos and eos tokens again
     
-    assert tokenizer.add_bos_token == False
-    assert tokenizer.add_eos_token == False
+    # assert tokenizer.add_bos_token == False
+    # assert tokenizer.add_eos_token == False
 
     bos_token = tokenizer.bos_token
     bos_token_id = tokenizer.bos_token_id
@@ -215,7 +214,7 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
         The special tokens are added using the token ids (for example, will directly add 1 for bos, instead of adding "<s>" to the text).
 
         Format:
-        <s> <|sys_start|> system prompt <|sys_end|> <|im_start|> first user utterance <|im_end|> first model response <|im_start|> next user utterance <|im_end|> next model response </s>
+        <s> <|im_start|> first user utterance <|im_end|> first model response <|im_start|> next user utterance <|im_end|> next model response </s>
         """
 
         sample_tokenized = []
@@ -233,7 +232,7 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
             system_prompt = DEFAULT_SYSTEM_PROMPT
 
         # tokenize system prompt
-        system_prompt_tokenized = [sys_start_id] + tokenizer(system_prompt, truncation=False, padding=False)[
+        system_prompt_tokenized = [sys_start_id] + tokenizer(system_prompt, truncation=False, padding=False,add_special_tokens=False)[
             'input_ids'] + [sys_end_id]  # <|sys_start|> system prompt <|sys_end|>
         system_prompt_loss_mask = [0] * len(system_prompt_tokenized)  # no loss for system prompt
 
@@ -246,7 +245,7 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
         for message in conversations:
             if message['from'] == 'human':
                 # tokenize user uttergit@github.com:mtian8/Megatron-LM.gitance
-                user_utterance_tokenized = [im_start_id] + tokenizer(message['value'], truncation=False, padding=False)[
+                user_utterance_tokenized = [im_start_id] + tokenizer(message['value'], truncation=False, padding=False,add_special_tokens=False)[
                     'input_ids'] + [im_end_id]  # <|im_start|> first user utterance <|im_end|>
                 user_utterance_loss_mask = [0] * len(user_utterance_tokenized)  # no loss for user utterance
                 sample_tokenized += user_utterance_tokenized
@@ -254,13 +253,13 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
 
                 # stats for user utterance
                 stats['sum_question_tokens'] += len(user_utterance_tokenized)
-                stats['sum_quesiion_count'] += 1
+                stats['sum_question_count'] += 1
 
             elif message['from'] == 'gpt':
                 # tokenize model response
                 # Note: There is no eos at the end of model response. The eos should mark the end of the whole sample, not the end of model response.
                 # Note: To indicate the end of model response, the model should learn to generate the <|im_start|> token.
-                model_response_tokenized = tokenizer(message['value'], truncation=False, padding=False)['input_ids']
+                model_response_tokenized = tokenizer(message['value'], truncation=False, padding=False,add_special_tokens=False)['input_ids']
                 model_response_loss_mask = [1] * len(
                     model_response_tokenized)  # should predict all tokens in model response
                 sample_tokenized += model_response_tokenized
@@ -295,12 +294,12 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
         text = sample['markdown']
 
         if len(text) < 20000:
-            sample_tokenized = [bos_token_id] + tokenizer(text, truncation=False, padding=False)['input_ids'] + [
+            sample_tokenized = [bos_token_id] + tokenizer(text, truncation=False, padding=False,add_special_tokens=False)['input_ids'] + [
                 eos_token_id]
         else:
             # split the text into paragraphs, where each paragraph should be at least 200000 characters. Only break at "\n\n"
             paragraphs = split_into_paragraphs(text)
-            tokenized_paragraphs = [tokenizer(paragraph, truncation=False, padding=False)['input_ids'] for paragraph in
+            tokenized_paragraphs = [tokenizer(paragraph, truncation=False, padding=False,add_special_tokens=False)['input_ids'] for paragraph in
                                     paragraphs]
             # concatenate all paragraphs
             concat_paragraphs = [item for sublist in tokenized_paragraphs for item in sublist]
@@ -318,8 +317,141 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
 
         return result
 
+    def process_sample3(sample):
+        # this is implemented to follow the UltraInteract format, which is instruct format
+
+        """
+        sample example:
+        conversations = {
+            'instruction': 'What is the best order to watch the Star Wars series? ...'
+            'response': 'The best'
+        }
+        """
+
+        """
+        Target format:
+        list special tokens:
+        bos: <s> 
+        eos: </s>
+        system_start: <|sys_start|>
+        system_end: <|sys_end|>
+        user_start: <|im_start|>
+        user_end: <|im_end|>
+
+        Note: 
+        Pay attention to the spaces, ideally no spaces before or after special tokens, but to better visualize, we add spaces here.
+        The special tokens are added using the token ids (for example, will directly add 1 for bos, instead of adding "<s>" to the text).
+
+        Format:
+        <|im_start|> first user utterance <|im_end|> first model response <|im_start|> next user utterance <|im_end|> next model response </s>
+        """
+
+        sample_tokenized = []
+        sample_loss_mask = []  # at the stage, the loss mask is aligned with the tokenized text. Will shift left by one after all tokens are concatenated
+
+        # add bos token
+        sample_tokenized.append(bos_token_id)
+        sample_loss_mask.append(0)
+
+        # tokenize user uttergit@github.com:mtian8/Megatron-LM.gitance
+        user_utterance_tokenized = [im_start_id] + tokenizer(sample['instruction'], truncation=False, padding=False,add_special_tokens=False)[
+            'input_ids'] + [im_end_id]  # <|im_start|> first user utterance <|im_end|>
+        user_utterance_loss_mask = [0] * len(user_utterance_tokenized)  # no loss for user utterance
+        sample_tokenized += user_utterance_tokenized
+        sample_loss_mask += user_utterance_loss_mask
+
+        # stats for user utterance
+        stats['sum_question_tokens'] += len(user_utterance_tokenized)
+        stats['sum_question_count'] += 1
+
+        # tokenize model response
+        # Note: There is no eos at the end of model response. The eos should mark the end of the whole sample, not the end of model response.
+        # Note: To indicate the end of model response, the model should learn to generate the <|im_start|> token.
+        try:
+            model_response_tokenized = tokenizer(sample['response'], truncation=False, padding=False,add_special_tokens=False)['input_ids']
+        except:
+            model_response_tokenized = tokenizer(sample['output'], truncation=False, padding=False,add_special_tokens=False)['input_ids']
+
+        model_response_loss_mask = [1] * len(
+            model_response_tokenized)  # should predict all tokens in model response
+        sample_tokenized += model_response_tokenized
+        sample_loss_mask += model_response_loss_mask
+
+        # stats for model response
+        stats['sum_reply_tokens'] += len(model_response_tokenized)
+        stats['sum_reply_count'] += 1
+
+        sample_tokenized.append(eos_token_id)
+        sample_loss_mask.append(1)  # should predict the eos token
+
+        assert len(sample_tokenized) == len(sample_loss_mask)
+
+        result = {
+            "token_ids": sample_tokenized,
+            "loss_mask": sample_loss_mask
+        }
+
+        debug = False
+        if debug:
+            debug_print(result)
+
+        return result
+    
+    
+    def process_sample4(sample):
+        # this is implemented to follow the pretrain format
+
+        """
+        sample example:
+        conversations = {
+        }
+        """
+        
+        sample_tokenized = []
+        sample_loss_mask = []  # at the stage, the loss mask is aligned with the tokenized text. Will shift left by one after all tokens are concatenated
+
+        # add bos token
+        sample_tokenized.append(bos_token_id)
+        sample_loss_mask.append(0)
+        
+        sample_tokenized = []
+        sample_loss_mask = []  # at the stage, the loss mask is aligned with the tokenized text. Will shift left by one after all tokens are concatenated
+
+
+        # tokenize model response
+        model_response_tokenized = tokenizer(sample['text'], truncation=False, padding=False,add_special_tokens=False)['input_ids']
+
+        model_response_loss_mask = [1] * len(
+            model_response_tokenized)  # should predict all tokens in model response
+        sample_tokenized += model_response_tokenized
+        sample_loss_mask += model_response_loss_mask
+
+        # stats for model response
+        stats['sum_reply_tokens'] += len(model_response_tokenized)
+        stats['sum_reply_count'] += 1
+
+        sample_tokenized.append(eos_token_id)
+        sample_loss_mask.append(1)  # should predict the eos token
+
+        assert len(sample_tokenized) == len(sample_loss_mask)
+
+        result = {
+            "token_ids": sample_tokenized,
+            "loss_mask": sample_loss_mask
+        }
+
+        debug = False
+        if debug:
+            debug_print(result)
+
+        return result
+
     if name in ['program_books', 'textbooks']:
         process_sample_func = process_sample2  # markdown format
+    elif name in ['UltraInteract_sft','evol_codealpaca1','evol_codealpaca2']:
+        process_sample_func = process_sample3
+    elif name in ['scicode_pub','scicode_software']:
+        process_sample_func = process_sample4
     else:
         process_sample_func = process_sample1  # instruct format
 
@@ -363,10 +495,10 @@ def process_func_base(name, input_files, output_dir, tokenizer_path):
 
     # calculate stat avergae
     if process_sample_func == process_sample1:
-        stats['avg_question_length'] = stats['sum_question_tokens'] / stats['sum_quesiion_count']
+        stats['avg_question_length'] = stats['sum_question_tokens'] / stats['sum_question_count']
         stats['avg_reply_length'] = stats['sum_reply_tokens'] / stats['sum_reply_count']
         stats['avg_reply_count_per_conversation'] = stats['sum_reply_count'] / stats['num_samples']
-        stats['avg_question_count_per_conversation'] = stats['sum_quesiion_count'] / stats['num_samples']
+        stats['avg_question_count_per_conversation'] = stats['sum_question_count'] / stats['num_samples']
 
     # print(stats)
     logger.info('Stats: %s', stats)
@@ -398,45 +530,45 @@ def process_slim_orca():
     input_files = [
         'raw/SlimOrca/oo-labeled_correct.gpt4.sharegpt.jsonl'
     ]
-    output_dir = 'processed/SlimOrca'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/SlimOrca'
     process_func_base('SlimOrca', input_files, output_dir)
 
 
 def process_html_alpaca():
     input_files = [
-        'raw/html_gpt3.5_50k.json'
+        'raw/raw/html_gpt3.5_50k.json'
     ]
-    output_dir = 'processed/html_alpaca'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/html_alpaca'
     process_func_base('html_alpaca', input_files, output_dir)
 
 
 def process_rosetta_alpaca():
     input_files = [
-        'raw/rosetta_alpaca.json'
+        'raw/raw/rosetta_alpaca.jsonl'
     ]
-    output_dir = 'processed/rosetta_alpaca'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/rosetta_alpaca'
     process_func_base('rosetta_alpaca', input_files, output_dir)
 
 
 def process_oasst1_guanaco():
     input_files = [
-        'raw/oasst1-guanaco-extended-sharegpt/guanaco.sharegpt.jsonl'
+        'raw/raw/oasst1-guanaco-extended-sharegpt/guanaco.sharegpt.jsonl'
     ]
-    output_dir = 'processed/oasst1_guanaco'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/oasst1_guanaco'
     process_func_base('oasst1_guanaco', input_files, output_dir)
 
 
 def process_sharegpt():
     input_files = [
-        'raw/ShareGPT_Vicuna_unfiltered/ShareGPT_V4.3_unfiltered_cleaned_split.json'
+        'raw/raw/ShareGPT_Vicuna_unfiltered/ShareGPT_V4.3_unfiltered_cleaned_split.json'
     ]
-    output_dir = 'processed/sharegpt'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/sharegpt'
     process_func_base('sharegpt', input_files, output_dir)
 
 
 def process_chatlogs():
-    input_files = glob('raw/chatlogs-en-cleaned/chatlogs_v2_cleaned*.jsonl')
-    output_dir = 'processed/chatlogs'
+    input_files = glob('raw/raw/chatlogs-en-cleaned/chatlogs_v2_cleaned*.jsonl')
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/chatlogs'
     process_func_base('chatlogs', input_files, output_dir)
 
 
@@ -444,7 +576,7 @@ def process_evol_sharegpt():
     input_files = [
         'raw/WizardLM_evol_instruct_V2_196k/WizardLM_evol_instruct_V2_143k.json'
     ]
-    output_dir = 'processed/evol_sharegpt'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/evol_sharegpt'
     process_func_base('evol_sharegpt', input_files, output_dir)
 
 
@@ -452,47 +584,39 @@ def process_codealpaca():
     input_files = [
         'raw/code_alpaca_20k.jsonl'
     ]
-    output_dir = 'processed/codealpaca'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/codealpaca'
     process_func_base('codealpaca', input_files, output_dir)
 
 
 def process_evol_codealpaca1():
     input_files = [
-        'raw/evol-codealpaca-v1.json'
+        'raw/raw/evol-codealpaca-v1/train.jsonl'
     ]
-    output_dir = 'processed/evol_codealpaca1'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/evol_codealpaca1'
     process_func_base('evol_codealpaca1', input_files, output_dir)
 
 
 def process_evol_codealpaca2():
     input_files = [
-        'raw/EvolInstruct-Code-80k.json'
+        'raw/raw/Evol-Instruct-Code-80k-v1/EvolInstruct-Code-80k.json'
     ]
-    output_dir = 'processed/evol_codealpaca2'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/evol_codealpaca2'
     process_func_base('evol_codealpaca2', input_files, output_dir)
 
 
 def process_program_books():
     input_files = [
-        'raw/programming_books_llama'
+        'raw/raw/programming_books_llama'
     ]
-    output_dir = 'processed/program_books'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/program_books'
     process_func_base('program_books', input_files, output_dir)
 
 
 def process_textbooks():
     input_files = [
-        'raw/textbooks'
+        'raw/raw/textbooks'
     ]
-    output_dir = 'processed/textbooks'
-    process_func_base('textbooks', input_files, output_dir)
-
-
-def process_textbooks():
-    input_files = [
-        'raw/textbooks'
-    ]
-    output_dir = 'processed/textbooks'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/textbooks'
     process_func_base('textbooks', input_files, output_dir)
 
 
@@ -500,24 +624,44 @@ def process_sharegpt_examples():
     input_files = [
         '../examples/sharegpt_examples.json'
     ]
-    output_dir = '../examples/processed/sharegpt_examples'
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/sharegpt_examples'
     process_func_base('sharegpt_examples', input_files, output_dir)
 
+def process_ultrainteract():
+    input_files = [
+        'raw/raw/UltraInteract_sft'
+    ]
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/ultrainteract'
+    process_func_base('UltraInteract_sft', input_files, output_dir)
+    
+def process_scicode_pub():
+    input_files = [
+        '/work/nvme/bcbw/qingzhi/pub_ocr.jsonl'
+    ]
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/scicode_pub'
+    process_func_base('scicode_pub', input_files, output_dir)
+    
+def process_scicode_software():
+    input_files = [
+        '/work/nvme/bcbw/qingzhi/software.jsonl'
+    ]
+    output_dir = '/work/nvme/bbvf/mtian8/LLM/Megatron-LM/processed/scicode_software'
+    process_func_base('scicode_software', input_files, output_dir)
 
 if __name__ == "__main__":
+    prepare_tokenizer(sys.argv[1])  # take tokenizer path from args
     # process_slim_orca()
-    # process_html_alpaca()
     # process_rosetta_alpaca()
     # process_oasst1_guanaco()
     # process_chatlogs()
-    # process_evol_sharegpt()
-    # process_codealpaca()
     # process_evol_codealpaca1()
     # process_evol_codealpaca2()
     # process_program_books()
     # process_textbooks()
     # process_sharegpt()
-    prepare_tokenizer(sys.argv[1])  # take tokenizer path from args
-    # process_slim_orca()
-    process_codealpaca()
-    process_evol_sharegpt()
+    # process_codealpaca()
+    # process_evol_sharegpt()
+    # process_ultrainteract()
+    process_scicode_pub()
+    process_scicode_software()
+    
