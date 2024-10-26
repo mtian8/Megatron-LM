@@ -8,10 +8,12 @@ from flask_restful import Resource, Api
 from megatron.training import get_args
 from megatron.inference.text_generation import generate_and_post_process
 from megatron.inference.text_generation import beam_search_and_post_process
-
+from megatron.inference.text_generation.tokenization import tokenize_prompts, detokenize_generations
 
 GENERATE_NUM = 0
 BEAM_NUM = 1
+TOKENIZE_NUM = 2
+DETOKENIZE_NUM = 3
 lock = threading.Lock()
 
 class MegatronGenerate(Resource):
@@ -229,13 +231,137 @@ class MegatronGenerate(Resource):
             except ValueError as ve:
                 return ve.args[0]
             print("end time: ", datetime.datetime.now())
-        
+
+
+class MegatronTokenize(Resource):
+    def __init__(self, model):
+        self.model = model
+
+    @staticmethod
+    def send_do_tokenize():
+        choice = torch.tensor([TOKENIZE_NUM], dtype=torch.long, device='cuda')
+        torch.distributed.broadcast(choice, 0)
+
+    @staticmethod
+    def send_do_detokenize():
+        choice = torch.tensor([DETOKENIZE_NUM], dtype=torch.long, device='cuda')
+        torch.distributed.broadcast(choice, 0)
+
+    def put(self):
+        args = get_args()
+
+        if not "texts" in request.get_json():
+            return "texts argument required", 400
+
+        if "sentences" in request.get_json():
+            return "sentences is no longer used.  Replace with prompts", 400
+
+        texts = request.get_json()["texts"]
+        if not isinstance(texts, list):
+            return "texts is not a list of strings", 400
+
+        if len(texts) == 0:
+            return "texts is empty", 400
+
+        if len(texts) > 128:
+            return "Maximum number of texts is 128", 400
+
+        add_BOS = False
+        if "add_BOS" in request.get_json():
+            add_BOS = request.get_json()["add_BOS"]
+            if not isinstance(add_BOS, bool):
+                return "add_BOS must be a boolean value"
+
+        if any([len(prompt) == 0 for prompt in texts]) and not add_BOS:
+            return "Empty prompts require add_BOS=true"
+
+
+        no_log = False
+        if "no_log" in request.get_json():
+            no_log = request.get_json()["no_log"]
+            if not isinstance(no_log, bool):
+                return "no_log must be a boolean value"
+
+
+        with lock:  # Need to get lock to keep multiple threads from hitting code
+
+            if not no_log:
+                print("request IP: " + str(request.remote_addr))
+                print(json.dumps(request.get_json()), flush=True)
+                print("start time: ", datetime.datetime.now())
+
+            try:
+                prompts_tokens_tensor, _ = tokenize_prompts(
+                    prompts=texts,
+                    tokens_to_generate=0,
+                    add_BOS=add_BOS,
+
+                )
+                return jsonify({"token_ids": prompts_tokens_tensor.cpu().tolist()})
+
+            except ValueError as ve:
+                return ve.args[0]
+            print("end time: ", datetime.datetime.now())
+
+
+class MegatronDetokenize(Resource):
+    def __init__(self, model):
+        self.model = model
+
+    @staticmethod
+    def send_do_detokenize():
+        choice = torch.tensor([DETOKENIZE_NUM], dtype=torch.long, device='cuda')
+        torch.distributed.broadcast(choice, 0)
+
+    def put(self):
+        args = get_args()
+
+        if not "tokens" in request.get_json():
+            return "tokens argument required", 400
+
+        tokens = request.get_json()["tokens"]
+        if not isinstance(tokens, list):
+            return "tokens is not a list of integer lists", 400
+
+        if len(tokens) == 0:
+            return "tokens is empty", 400
+
+        if len(tokens) > 128:
+            return "Maximum number of tokens is 128", 400
+
+        no_log = False
+        if "no_log" in request.get_json():
+            no_log = request.get_json()["no_log"]
+            if not isinstance(no_log, bool):
+                return "no_log must be a boolean value"
+
+        with lock:  # Need to get lock to keep multiple threads from hitting code
+
+            if not no_log:
+                print("request IP: " + str(request.remote_addr))
+                print(json.dumps(request.get_json()), flush=True)
+                print("start time: ", datetime.datetime.now())
+
+            try:
+                _, texts, _ = detokenize_generations(
+                    tokens_gpu_tensor=tokens,
+                    lengths_gpu_tensor=[None] * len(tokens),
+                    detokenize_segments=False
+                )
+                return jsonify({"texts": texts})
+
+            except ValueError as ve:
+                return ve.args[0]
+            print("end time: ", datetime.datetime.now())
+
 
 class MegatronServer(object):
     def __init__(self, model):
         self.app = Flask(__name__, static_url_path='')
         api = Api(self.app)
         api.add_resource(MegatronGenerate, '/api', resource_class_args=[model])
+        api.add_resource(MegatronTokenize, '/api/tokenize', resource_class_args=[model])
+        api.add_resource(MegatronDetokenize, '/api/detokenize', resource_class_args=[model])
         
     def run(self, url, port): 
         self.app.run(url, threaded=True, debug=False, port=port)
