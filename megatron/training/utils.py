@@ -225,7 +225,8 @@ def get_ltor_masks_and_position_ids(data,
                         prev_index = i + 1
 
     # Convert attention mask to binary:
-    attention_mask = (attention_mask < 0.5)
+    if attention_mask is not None:
+        attention_mask = (attention_mask < 0.5)
 
     return attention_mask, loss_mask, position_ids
 
