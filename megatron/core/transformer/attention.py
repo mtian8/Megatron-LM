@@ -311,6 +311,7 @@ class Attention(MegatronModule, ABC):
                 packed_seq_params=packed_seq_params,
             )
         else:
+            # print("core_attention")
             core_attn_out = self.core_attention(
                 query,
                 key,
@@ -330,9 +331,9 @@ class Attention(MegatronModule, ABC):
         # =================
         # Output. [sq, b, h]
         # =================
-
+        # print("linear_proj")
         output, bias = self.linear_proj(core_attn_out)
-
+        # print("output", output)
         return output, bias
 
 
@@ -468,9 +469,10 @@ class SelfAttention(Attention):
         """
         Derives `query`, `key` and `value` tensors from `hidden_states`.
         """
+        # print("linear_qkv")
         # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
         mixed_qkv, _ = self.linear_qkv(hidden_states)
-
+        # print("mixed_qkv")
         # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
         new_tensor_shape = mixed_qkv.size()[:-1] + (
             self.num_query_groups_per_partition,
@@ -480,7 +482,7 @@ class SelfAttention(Attention):
             ),
         )
         mixed_qkv = mixed_qkv.view(*new_tensor_shape)
-
+        # print("split")
         split_arg_list = [
             (
                 self.num_attention_heads_per_partition
@@ -490,7 +492,7 @@ class SelfAttention(Attention):
             self.hidden_size_per_attention_head,
             self.hidden_size_per_attention_head,
         ]
-
+        # print("SplitAlongDim")
         if SplitAlongDim is not None:
 
             # [sq, b, ng, (np/ng + 2) * hn]
@@ -501,19 +503,19 @@ class SelfAttention(Attention):
             # [sq, b, ng, (np/ng + 2) * hn]
             # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
             (query, key, value) = torch.split(mixed_qkv, split_arg_list, dim=3)
-
+        # print("reshape")
         # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
         query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
-
+        # print("q_layernorm")
         if self.q_layernorm is not None:
             query = self.q_layernorm(query)
-
+        # print("k_layernorm")
         if self.k_layernorm is not None:
             key = self.k_layernorm(key)
-
+        # print("test_mode", self.config.test_mode)
         if self.config.test_mode:
             self.run_realtime_tests()
-
+        # print("return")
         return query, key, value
 
 

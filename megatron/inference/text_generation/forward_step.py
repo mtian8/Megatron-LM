@@ -37,12 +37,15 @@ class ForwardStep:
             args.inference_batch_times_seqlen_threshold
 
     def _forward(self, tokens, position_ids, attention_mask):
+        # print("In _forward")
         return self.model(tokens, position_ids, attention_mask, inference_params=self.inference_params)
 
     def __call__(self, tokens, position_ids, attention_mask):
         """Invocation of the forward methods. Note that self.inference_params
         is being modified by the forward step."""
         # Pipelining case.
+        # print("In forward step")
+        # print("Pipeline size larger than one: ", self.pipeline_size_larger_than_one)
         if self.pipeline_size_larger_than_one:
             current_batch_x_seqlen = tokens.size(0) * tokens.size(1)
             if current_batch_x_seqlen >= self.pipelining_batch_x_seqlen:
@@ -63,19 +66,21 @@ class ForwardStep:
         only the first time the memory is allocated."""
         batch_size = tokens.size(0)
         sequence_length = tokens.size(1)
+        # print("In forward step helper. Allocating recv buffer")
         if recv_buffer is None:
             recv_buffer = _allocate_recv_buffer(batch_size, sequence_length)
-
+        # print("Allocated recv buffer")
         # Receive from previous stage.
         recv_from_prev_pipeline_rank_(recv_buffer)
-
+        # print("Received from previous pipeline rank")
         # Forward pass through the model.
         self.model.set_input_tensor(recv_buffer)
+        # print("Set input tensor. About to run forward pass")
         output_tensor = self._forward(tokens, position_ids, attention_mask)
-
+        # print("Ran forward pass. About to send to next pipeline rank")
         # Send output to the next stage.
         send_to_next_pipeline_rank(output_tensor)
-
+        # print("Done _forward_step_helper")
         return output_tensor
 
 
@@ -83,6 +88,7 @@ class ForwardStep:
     def _no_pipelining_forward_step(self, tokens, position_ids, attention_mask,
                                     recv_buffer=None):
         """If recv_buffer is none, we will allocate one on the fly."""
+        # print("In no pipelining forward step")
         # Run a simple forward pass.
         output_tensor = self._forward_step_helper(tokens, position_ids,
                                                   attention_mask, recv_buffer=recv_buffer)

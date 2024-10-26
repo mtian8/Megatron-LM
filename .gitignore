@@ -9,3 +9,9 @@ logs
 .vscode
 local/
 .gitmodules
+scripts/
+log/
+*.out
+core
+processed/
+raw

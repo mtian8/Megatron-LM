@@ -93,7 +93,6 @@ class MLP(MegatronModule):
         )
 
     def forward(self, hidden_states):
-
         # [s, b, 4 * h/p]
         intermediate_parallel, bias_parallel = self.linear_fc1(hidden_states)
 
@@ -105,6 +104,7 @@ class MLP(MegatronModule):
                     assert self.config.add_bias_linear is True
                     intermediate_parallel = bias_gelu_impl(intermediate_parallel, bias_parallel)
             elif self.activation_func == F.silu and self.config.gated_linear_unit:
+                # print('device properties swiglu', torch.cuda.get_device_properties(0))
                 intermediate_parallel = bias_swiglu_impl(
                     intermediate_parallel,
                     bias_parallel,
@@ -126,6 +126,7 @@ class MLP(MegatronModule):
                 intermediate_parallel = self.activation_func(intermediate_parallel)
 
         # [s, b, h]
+
         output, output_bias = self.linear_fc2(intermediate_parallel)
 
         return output, output_bias

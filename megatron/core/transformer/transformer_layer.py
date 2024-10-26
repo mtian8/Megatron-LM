@@ -289,7 +289,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # Optional Input Layer norm
         input_layernorm_output = self.input_layernorm(hidden_states)
-
+        # print("Before self_attention")
         # Self attention.
         attention_output_with_bias = self.self_attention(
             input_layernorm_output,
@@ -298,20 +298,23 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             rotary_pos_emb=rotary_pos_emb,
             packed_seq_params=packed_seq_params,
         )
+        # print("After self_attention")
 
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
+        # print("Before self_bias_droupout_add")
         with self.bias_dropout_add_exec_handler():
+            # print("Before self_attn_bda")
             hidden_states = self.self_attn_bda(self.training, self.config.bias_dropout_fusion)(
                 attention_output_with_bias, residual, self.hidden_dropout
             )
-
+        # print("After self_bias_droupout_add")
         # Residual connection.
         residual = hidden_states
-
+        # print("Before pre_cross_attn_layernorm")
         # Optional Layer norm after self-attention
         pre_cross_attn_layernorm_output = self.pre_cross_attn_layernorm(hidden_states)
-
+        # print("Before cross_attention")
         # Cross attention.
         attention_output_with_bias = self.cross_attention(
             pre_cross_attn_layernorm_output,
@@ -335,9 +338,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # Optional Layer norm post the cross-attention.
         pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
-
+        # print("Before MLP")
         # MLP.
         mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
+        # print("After MLP")
 
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?

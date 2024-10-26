@@ -149,13 +149,12 @@ class MegatronGenerate(Resource):
                 return "random_seed must be integer"
             if random_seed < 0: 
                 return "random_seed must be a positive integer"
-
+        
         no_log = False
         if "no_log" in request.get_json():
             no_log = request.get_json()["no_log"]
             if not isinstance(no_log, bool):
                 return "no_log must be a boolean value"
-        
         beam_width = None
         if "beam_width" in request.get_json():
             beam_width = request.get_json()["beam_width"]
@@ -182,7 +181,7 @@ class MegatronGenerate(Resource):
             
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()),flush=True)
+                print(json.dumps(request.get_json())[:500],flush=True)
                 print("start time: ", datetime.datetime.now())
             
             try:
@@ -287,7 +286,7 @@ class MegatronTokenize(Resource):
 
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()), flush=True)
+                print(json.dumps(request.get_json())[:500], flush=True)
                 print("start time: ", datetime.datetime.now())
 
             try:
@@ -339,7 +338,7 @@ class MegatronDetokenize(Resource):
 
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()), flush=True)
+                print(json.dumps(request.get_json())[:500], flush=True)
                 print("start time: ", datetime.datetime.now())
 
             try:

@@ -136,6 +136,7 @@ class RetroEncoderBiasDropoutAdd(MegatronModule):
         Returns:
             Output of bias-dropout-add.
         """
+        # print("In encoder_attention.py, RetroEncoderBiasDropoutAdd._forward()")
 
         # Re-enable torch grad to enable fused optimization.
         with torch.enable_grad():

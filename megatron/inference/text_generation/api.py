@@ -146,7 +146,7 @@ def generate(model,
     # Note that these tensors are broadcasted to all ranks.
     if torch.distributed.get_rank() == 0:
         assert prompts is not None
-
+    # print("About to tokenize prompts")
     context_tokens_tensor, context_length_tensor = tokenize_prompts(
         prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS,
         data_parallel=data_parallel)

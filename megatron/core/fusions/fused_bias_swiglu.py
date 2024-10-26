@@ -10,7 +10,9 @@ from megatron.core.jit import jit_fuser
 
 @jit_fuser
 def swiglu(y):
+    print('device properties swiglu y1 y2', torch.cuda.get_device_properties(0))
     y_1, y_2 = torch.chunk(y, 2, -1)
+    # print('device properties swiglu y1 y2 after', torch.cuda.get_device_properties(0))
     return F.silu(y_1) * y_2
 
 
@@ -41,8 +43,11 @@ class BiasSwiGLUFunction(torch.autograd.Function):
     @staticmethod
     # bias is an optional argument
     def forward(ctx, input, bias, fp8_input_store):
+        # print('device properties forward', torch.cuda.get_device_properties(0))
         input_for_backward = input.to(torch.float8_e4m3fn) if fp8_input_store else input
+        # print('device properties save', torch.cuda.get_device_properties(0))
         ctx.save_for_backward(input_for_backward, bias)
+        # print('device properties ori', torch.cuda.get_device_properties(0))
         ctx.ori_input_dtype = input.dtype
         ctx.fp8_input_store = fp8_input_store
         return bias_swiglu(input, bias)
@@ -78,8 +83,12 @@ def bias_swiglu_impl(input, bias, fp8_input_store=False):
     assert len(ori_shape) in [2, 3]
     input = input.view(-1, ori_shape[-1])
     if bias is not None:
+        # print('device properties Bias swiglu', torch.cuda.get_device_properties(0))
         output = BiasSwiGLUFunction.apply(input, bias, fp8_input_store)
     else:
+        # print('device properties (no bias) swiglu', torch.cuda.get_device_properties(0))
+        # print('input shape before', input.shape)
+        # print('fp8_input_store before', fp8_input_store)
         output = SwiGLUFunction.apply(input, fp8_input_store)
 
     return output if len(ori_shape) == 2 else output.view(ori_shape[0], ori_shape[1], -1)

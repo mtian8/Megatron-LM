@@ -3,8 +3,8 @@
 export NCCL_IB_SL=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_APPLY_QK_LAYER_SCALING=0
-
-DISTRIBUTED_ARGS="--nproc_per_node 1 \
+export TRITON_LIBCUDA_PATH=/usr/local/cuda/compat/lib.real
+DISTRIBUTED_ARGS="--nproc_per_node 4 \
                   --nnodes 1 \
                   --node_rank 0 \
                   --master_addr 0.0.0.0 \
@@ -31,7 +31,7 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --transformer-impl transformer_engine \
       --normalization RMSNorm \
       --group-query-attention \
-      --num-query-groups 8 \
+      --num-query-groups 32 \
       --no-masked-softmax-fusion \
       --attention-softmax-in-fp32 \
       --attention-dropout 0.0 \
@@ -39,17 +39,17 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --untie-embeddings-and-output-weights \
       --position-embedding-type rope \
       --rotary-percent 1.0 \
-      --rotary-base 500000 \
+      --rotary-base 10000 \
       --use-rotary-position-embeddings \
       --swiglu \
       --tensor-model-parallel-size 1  \
       --pipeline-model-parallel-size 1  \
       --num-layers 32  \
       --hidden-size 4096  \
-      --ffn-hidden-size 14336 \
+      --ffn-hidden-size 11008 \
       --load ${CHECKPOINT}  \
       --num-attention-heads 32  \
-      --max-position-embeddings 8192  \
+      --max-position-embeddings 4096  \
       --bf16  \
       --micro-batch-size 1  \
-      --seq-length 8192
+      --seq-length 4096

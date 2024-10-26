@@ -243,7 +243,7 @@ class RetroDecoderBiasDropoutAdd(MegatronModule):
         Returns:
             Output of bias-dropout-add.
         """
-
+        # print("In RetroDecoderBiasDropoutAdd._forward")
         # Extract input dict.
         ns = x_with_bias["ns"]
         bs = x_with_bias["bs"]
@@ -255,7 +255,7 @@ class RetroDecoderBiasDropoutAdd(MegatronModule):
 
         # Re-enable torch grad to enable fused optimization.
         with torch.enable_grad():
-
+            # print("In RetroDecoderBiasDropoutAdd._forward with torch.enable_grad()")
             # Bias-dropout-add.
             x = bias_dropout_add(
                 (
@@ -265,7 +265,7 @@ class RetroDecoderBiasDropoutAdd(MegatronModule):
                 torch.zeros_like(attention_output),
                 prob,
             )
-
+            # print("In RetroDecoderBiasDropoutAdd._forward with torch.enable_grad() after bias_dropout_add")
             # Permute chunks back to sequence dimension.
             # 1. [ m, bs*l, d ]
             # 2. [ m, bs, l, d ]

@@ -487,18 +487,24 @@ class TransformerBlock(MegatronModule):
                 )
             else:
                 for l_no, layer in enumerate(self.layers):
+                    # print("In transformer block forward pass layer number: ", l_no)
                     with self.offload_context:
                         layer.use_cudagraph = True
                         if (len(self.cuda_graphs) == 0) or (not self.training):
-                            hidden_states, context = layer(
-                                hidden_states=hidden_states,
-                                attention_mask=attention_mask,
-                                context=context,
-                                context_mask=context_mask,
-                                rotary_pos_emb=rotary_pos_emb,
-                                inference_params=inference_params,
-                                packed_seq_params=packed_seq_params,
-                            )
+                            # print("Before layer forward pass: ", hidden_states)
+                            try:
+                                hidden_states, context = layer(
+                                    hidden_states=hidden_states,
+                                    attention_mask=attention_mask,
+                                    context=context,
+                                    context_mask=context_mask,
+                                    rotary_pos_emb=rotary_pos_emb,
+                                    inference_params=inference_params,
+                                    packed_seq_params=packed_seq_params,
+                                )
+                            except Exception as e:
+                                print("Error in layer forward pass: ", e)
+                            # print("After layer forward pass: ", hidden_states)
                         else:
                             # CUDA graph replay for layer `l_no` and microbatch
                             # `self.current_microbatch`. TransformerEngine versions>=1.10

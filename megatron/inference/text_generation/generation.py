@@ -125,8 +125,8 @@ def generate_tokens_probs_and_return_on_first_stage(
         generated_sequence_lengths: total length (including prompt) of
             the generated sequence. size: [b]
         output_log_probs: log probability of the selected tokens. size: [b, s]
-    """
-
+    """ 
+    # print("About to generate tokens")
     args = get_args()
     tokenizer = get_tokenizer()
 
@@ -140,6 +140,7 @@ def generate_tokens_probs_and_return_on_first_stage(
     if max_sequence_length * batch_size > args.max_tokens_to_oom:
         raise ValueError("Too many tokens.  " + str(max_sequence_length*batch_size)+ " is greater than "+str(args.max_tokens_to_oom))
 
+    # print("Prepared to generate tokens")
     # forward step.
     forward_step = forward_step(model, batch_size, max_sequence_length)
 
@@ -181,20 +182,22 @@ def generate_tokens_probs_and_return_on_first_stage(
     # =============
 
     with torch.no_grad():
+        # print("About to build attention mask")
         attention_mask, position_ids = _build_attention_mask_and_position_ids(
             tokens)
         prev_context_length = 0
+        # print("About to start generating tokens")
         for context_length in range(min_prompt_length, max_sequence_length):
-
+            # print("Generating tokens at context length", context_length)
             # Pick the slice that we need to pass through the network.
             tokens2use = tokens[:, prev_context_length:context_length]
             positions2use = position_ids[:, prev_context_length:context_length]
             attention_mask2use = attention_mask[
                 ..., prev_context_length:context_length, :context_length]
-
+            # print("About to run forward step")
             # logits will be meanigful only in the last pipeline stage.
             logits = forward_step(tokens2use, positions2use, attention_mask2use)
-
+            # print("Finished running forward step")
             if mpu.is_pipeline_last_stage():
                 if prevent_newline_after_colon:
                     logits[tokens2use[:, -1] == tokenizer.tokenize(':')[0], -1, tokenizer.tokenize('\n')[0]] = -1e10 # disable "\n" after ":"
@@ -235,7 +238,7 @@ def generate_tokens_probs_and_return_on_first_stage(
                         output_log_probs[:,
                                          prev_context_length:context_length] = \
                             torch.gather(log_probs, 2, indices).squeeze(2)
-
+            # print("About to copy from last to first pipeline stage")
             # Update the tokens on the first stage so the next input to
             # the network is correct.
             copy_from_last_to_first_pipeline_stage(batch_size, torch.int64,
@@ -246,6 +249,7 @@ def generate_tokens_probs_and_return_on_first_stage(
 
             # Check if all the sequences have hit the termination_id.
             done = None
+            # print("Checking if all sequences have hit the termination id")
             if mpu.is_pipeline_last_stage():
                 # TODO(rprenger) These stopping methods are tokenizer dependent
                 # instead tokenization should be in the inference loop so stop sequences can be used
@@ -266,11 +270,14 @@ def generate_tokens_probs_and_return_on_first_stage(
                     context_length + 1
                 is_generation_done = is_generation_done | done_token
                 done = torch.all(is_generation_done)
+            # print("About to broadcast from last pipeline stage")
             done = broadcast_from_last_pipeline_stage(1, torch.uint8,
                                                       tensor=done)
+            # print("Finished broadcasting from last pipeline stage")
             if use_eod_token_for_early_termination and done:
                 break
-
+        
+        # print("Finished generating tokens")
     # ===================================================
     # Update the length of based on max generated length.
     # ===================================================

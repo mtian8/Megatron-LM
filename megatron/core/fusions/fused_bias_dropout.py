@@ -7,6 +7,7 @@ from megatron.core.jit import jit_fuser
 
 
 def _bias_dropout_add_func(x_with_bias, residual, prob, training):
+    # print("In fused_bias_dropout.py, _bias_dropout_add_func()")
     # type: (Tuple[Tensor, Optional[Tensor]], Tensor, float, bool) -> Tensor
     # NOTE: Previously, the argument `bias` used to be passed as
     # `bias.expand_as(residual)` when the `bias_dropout_func` is called from the
@@ -21,20 +22,44 @@ def _bias_dropout_add_func(x_with_bias, residual, prob, training):
     # in fp32, and it will up-cast the result to fp32, causing pipeline parallel
     # GPU communication to hang. Therefore, we need to cast residual to the same
     # dtype as x.
+    # print("x.dtype: ", x.dtype)
     residual = residual if residual.dtype == x.dtype else residual.to(x.dtype)
 
     # The Dropout operation, Residual Addition and the tensor returning can be
     # done generically outside the if statement, but that stops fusing of Bias
     # Addition-Dropout-Residual Addition operation. So doing it together inside
     # the conditional branch to improve performance
+    # print("bias: ", bias)
     if bias is not None:
         x = x + bias
+        # print("before dropout")
         out = torch.nn.functional.dropout(x, p=prob, training=training)
+        # print("after dropout")
         out = residual + out
+        # print("returning out")
         return out
     else:
+        # print("before dropout (no bias): ", x.shape, prob, training)
+
+
+        # print("Torch version: ", torch.__version__, torch.__file__) 
+        # print('device count', torch.cuda.device_count())
+        # print('current device', torch.cuda.current_device())
+        # print('device name', torch.cuda.get_device_name())
+        print('device properties', torch.cuda.get_device_properties(0))
+        # a1 = torch.rand(1, dtype=torch.bfloat16, device="cuda:0")
+        # print("Out_1")
+        # out_a1 = torch.nn.functional.dropout(a1, p=prob, training=training)
+        # print("Out_")
+        
+        # print("Out a1", out_a1[0])
+        # a2 = torch.rand_like(x)
+        # out_a2 = torch.nn.functional.dropout(a2, p=prob, training=training)
+        # print("Out a2", out_a2[0][0]) 
         out = torch.nn.functional.dropout(x, p=prob, training=training)
+        # print("after dropout (no bias)")
         out = residual + out
+        # print("returning out")
         return out
 
 
