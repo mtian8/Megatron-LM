@@ -174,7 +174,7 @@ def get_ltor_masks_and_position_ids(data,
                                     reset_position_ids,
                                     reset_attention_mask,
                                     eod_mask_loss,
-                                    use_attention_mask=False):
+                                    use_attention_mask=True):
     """Build masks and position id for left to right model."""
 
     # Extract batch size and sequence length.

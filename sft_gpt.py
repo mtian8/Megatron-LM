@@ -150,7 +150,8 @@ def get_batch(data_iterator):
         None,
         args.reset_position_ids,
         args.reset_attention_mask,
-        args.eod_mask_loss)
+        args.eod_mask_loss,
+        False)
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 

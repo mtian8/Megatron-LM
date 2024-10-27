@@ -21,8 +21,12 @@ def detokenize_generations(tokens_gpu_tensor,
     if return_segments:
         prompts_plus_generations_segments = []
 
-    tokens = tokens_gpu_tensor.cpu().numpy().tolist()
-    lengths = lengths_gpu_tensor.cpu().numpy().tolist()
+    if isinstance(tokens_gpu_tensor, list):
+        tokens = tokens_gpu_tensor
+        lengths = lengths_gpu_tensor
+    else:
+        tokens = tokens_gpu_tensor.cpu().numpy().tolist()
+        lengths = lengths_gpu_tensor.cpu().numpy().tolist()
     for sequence_tokens, length in zip(tokens, lengths):
         sequence_tokens = sequence_tokens[:length]
         prompts_plus_generations.append(
