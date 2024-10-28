@@ -21,8 +21,10 @@ fi
 CHECKPOINT=$1
 TOKENIZER_MODEL=$2
 export NVTE_FLASH_ATTN=1
+export NVTE_FUSED_ATTN=0
+export TORCHINDUCTOR_CACHE_DIR=/projects/bcdz/mtian8/tmp
 #     --window-size 1024 0 \
-pip install flask-restful
+# pip install flask-restful
 
 torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --use-checkpoint-args \
@@ -40,7 +42,7 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --untie-embeddings-and-output-weights \
       --position-embedding-type rope \
       --rotary-percent 1.0 \
-      --rotary-base 10000 \
+      --rotary-base 8000000 \
       --use-rotary-position-embeddings \
       --swiglu \
       --tensor-model-parallel-size 1  \
@@ -50,7 +52,8 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --ffn-hidden-size 11008 \
       --load ${CHECKPOINT}  \
       --num-attention-heads 32  \
-      --max-position-embeddings 4096  \
+      --max-position-embeddings 131072  \
       --bf16  \
       --micro-batch-size 1  \
-      --seq-length 4096
+      --seq-length 131072 \
+      --window-size 4096 0 
