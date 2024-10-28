@@ -539,8 +539,11 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
             # can have same shape but different strides.
             # We unify them to the first one to pass the stride check in TE
             if value.shape == key.shape and value.shape[0] == 1 and value.stride() != key.stride():
-                value = value.as_strided(value.shape, key.stride())
-
+                value = value.as_strided(value.shape, key.stride()) 
+        if _te_version < packaging.version.Version("1.9.0"):
+            if packed_seq_kwargs.get("window_size") is None and self.window_size is not None:
+                packed_seq_kwargs["window_size"] = self.window_size 
+        # print("Packed seq kwargs", packed_seq_kwargs)
         if self.te_forward_mask_type:
             if qkv_format == 'thd' and _te_version >= packaging.version.Version("1.7.0"):
                 # thd format uses flash attention with cuDNN kernel which requires is_padding=True, so the only
@@ -549,7 +552,11 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
                 if attn_mask_type == AttnMaskType.causal:
                     attn_mask_type = AttnMaskType.padding_causal
                 elif attn_mask_type == AttnMaskType.no_mask:
-                    attn_mask_type = AttnMaskType.padding
+                    if attention_mask is not None:
+                        attn_mask_type = AttnMaskType.padding
+                    else:
+                        attn_mask_type = AttnMaskType.padding_causal
+
             core_attn_out = super().forward(
                 query,
                 key,

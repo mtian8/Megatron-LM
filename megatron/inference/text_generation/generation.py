@@ -193,9 +193,9 @@ def generate_tokens_probs_and_return_on_first_stage(
             # Pick the slice that we need to pass through the network.
             tokens2use = tokens[:, prev_context_length:context_length]
             positions2use = position_ids[:, prev_context_length:context_length]
-            attention_mask2use = attention_mask[
-                ..., prev_context_length:context_length, :context_length]
-
+            # attention_mask2use = attention_mask[
+            #     ..., prev_context_length:context_length, :context_length]
+            attention_mask2use = attention_mask
             # logits will be meanigful only in the last pipeline stage.
             logits = forward_step(tokens2use, positions2use, attention_mask2use)
 
@@ -436,6 +436,7 @@ def _build_attention_mask_and_position_ids(tokens):
         eod_token=None,
         reset_position_ids=False,
         reset_attention_mask=False,
-        eod_mask_loss=False)
+        eod_mask_loss=False,
+        use_attention_mask=False)
 
     return attention_mask, position_ids
