@@ -16,6 +16,7 @@ BEAM_NUM = 1
 TOKENIZE_NUM = 2
 DETOKENIZE_NUM = 3
 MODIFY_WINDOW_SIZE_NUM = 4
+GENERAL_API_NUM = 5
 lock = threading.Lock()
 
 class MegatronGenerate(Resource):
@@ -33,18 +34,21 @@ class MegatronGenerate(Resource):
         torch.distributed.broadcast(choice, 0)
     
     def put(self):
+        return self.put_inner(request.get_json())
+
+    def put_inner(self, request_json):
         args = get_args()
        
-        if not "prompts" in request.get_json():
+        if not "prompts" in request_json:
             return "prompts argument required", 400
         
-        if "max_len" in request.get_json():
+        if "max_len" in request_json:
             return "max_len is no longer used.  Replace with tokens_to_generate", 400
         
-        if "sentences" in request.get_json():
+        if "sentences" in request_json:
             return "sentences is no longer used.  Replace with prompts", 400
 
-        prompts = request.get_json()["prompts"]
+        prompts = request_json["prompts"]
         if not isinstance(prompts, list):
             return "prompts is not a list of strings", 400
 
@@ -55,16 +59,16 @@ class MegatronGenerate(Resource):
             return "Maximum number of prompts is 128", 400
         
         tokens_to_generate = 64  # Choosing hopefully sane default.  Full sequence is slow
-        if "tokens_to_generate" in request.get_json():
-            tokens_to_generate = request.get_json()["tokens_to_generate"]
+        if "tokens_to_generate" in request_json:
+            tokens_to_generate = request_json["tokens_to_generate"]
             if not isinstance(tokens_to_generate, int):
                 return "tokens_to_generate must be an integer greater than 0"
             if tokens_to_generate < 0:
                 return "tokens_to_generate must be an integer greater than or equal to 0"
 
         logprobs = False
-        if "logprobs" in request.get_json():
-            logprobs = request.get_json()["logprobs"]
+        if "logprobs" in request_json:
+            logprobs = request_json["logprobs"]
             if not isinstance(logprobs, bool):
                 return "logprobs must be a boolean value"
         
@@ -72,24 +76,24 @@ class MegatronGenerate(Resource):
             return "tokens_to_generate=0 implies logprobs should be True"
         
         temperature = 1.0
-        if "temperature" in request.get_json():
-            temperature = request.get_json()["temperature"]
+        if "temperature" in request_json:
+            temperature = request_json["temperature"]
             if not (type(temperature) == int or type(temperature) == float):
                 return "temperature must be a positive number less than or equal to 100.0"
             if not (0.0 < temperature <= 100.0):
                 return "temperature must be a positive number less than or equal to 100.0"
         
         top_k = 0.0
-        if "top_k" in request.get_json():
-            top_k = request.get_json()["top_k"]
+        if "top_k" in request_json:
+            top_k = request_json["top_k"]
             if not (type(top_k) == int):
                 return "top_k must be an integer equal to or greater than 0 and less than or equal to 1000"
             if not (0 <= top_k <= 1000):
                 return "top_k must be equal to or greater than 0 and less than or equal to 1000"
         
         top_p = 0.0
-        if "top_p" in request.get_json():
-            top_p = request.get_json()["top_p"]
+        if "top_p" in request_json:
+            top_p = request_json["top_p"]
             if not (type(top_p) == float):
                 return "top_p must be a positive float less than or equal to 1.0"
             if top_p > 0.0 and top_k > 0.0:
@@ -98,8 +102,8 @@ class MegatronGenerate(Resource):
                 return "top_p must be less than or equal to 1.0"
         
         top_p_decay = 0.0
-        if "top_p_decay" in request.get_json():
-            top_p_decay = request.get_json()["top_p_decay"]
+        if "top_p_decay" in request_json:
+            top_p_decay = request_json["top_p_decay"]
             if not (type(top_p_decay) == float):
                 return "top_p_decay must be a positive float less than or equal to 1.0"
             if top_p == 0.0:
@@ -108,8 +112,8 @@ class MegatronGenerate(Resource):
                 return "top_p_decay must be less than or equal to 1.0"
         
         top_p_bound = 0.0
-        if "top_p_bound" in request.get_json():
-            top_p_bound = request.get_json()["top_p_bound"]
+        if "top_p_bound" in request_json:
+            top_p_bound = request_json["top_p_bound"]
             if not (type(top_p_bound) == float):
                 return "top_p_bound must be a positive float less than or equal to top_p"
             if top_p == 0.0:
@@ -118,8 +122,8 @@ class MegatronGenerate(Resource):
                 return "top_p_bound must be greater than 0 and less than top_p"
         
         add_BOS = False
-        if "add_BOS" in request.get_json():
-            add_BOS = request.get_json()["add_BOS"]
+        if "add_BOS" in request_json:
+            add_BOS = request_json["add_BOS"]
             if not isinstance(add_BOS, bool):
                 return "add_BOS must be a boolean value"
         
@@ -127,40 +131,40 @@ class MegatronGenerate(Resource):
         #     return "Empty prompts require add_BOS=true"
 
         stop_on_double_eol = False
-        if "stop_on_double_eol" in request.get_json():
-            stop_on_double_eol = request.get_json()["stop_on_double_eol"]
+        if "stop_on_double_eol" in request_json:
+            stop_on_double_eol = request_json["stop_on_double_eol"]
             if not isinstance(stop_on_double_eol, bool):
                 return "stop_on_double_eol must be a boolean value"
         
         stop_on_eol = False
-        if "stop_on_eol" in request.get_json():
-            stop_on_eol = request.get_json()["stop_on_eol"]
+        if "stop_on_eol" in request_json:
+            stop_on_eol = request_json["stop_on_eol"]
             if not isinstance(stop_on_eol, bool):
                 return "stop_on_eol must be a boolean value"
 
         prevent_newline_after_colon = False
-        if "prevent_newline_after_colon" in request.get_json():
-            prevent_newline_after_colon = request.get_json()["prevent_newline_after_colon"]
+        if "prevent_newline_after_colon" in request_json:
+            prevent_newline_after_colon = request_json["prevent_newline_after_colon"]
             if not isinstance(prevent_newline_after_colon, bool):
                 return "prevent_newline_after_colon must be a boolean value"
 
         random_seed = -1
-        if "random_seed" in request.get_json():
-            random_seed = request.get_json()["random_seed"]
+        if "random_seed" in request_json:
+            random_seed = request_json["random_seed"]
             if not isinstance(random_seed, int):
                 return "random_seed must be integer"
             if random_seed < 0: 
                 return "random_seed must be a positive integer"
 
         no_log = not False
-        if "no_log" in request.get_json():
-            no_log = request.get_json()["no_log"]
+        if "no_log" in request_json:
+            no_log = request_json["no_log"]
             if not isinstance(no_log, bool):
                 return "no_log must be a boolean value"
         
         beam_width = None
-        if "beam_width" in request.get_json():
-            beam_width = request.get_json()["beam_width"]
+        if "beam_width" in request_json:
+            beam_width = request_json["beam_width"]
             if not isinstance(beam_width, int):
                 return "beam_width must be integer"
             if beam_width < 1:
@@ -169,14 +173,14 @@ class MegatronGenerate(Resource):
                 return "When doing beam_search, batch size must be 1"
 
         stop_token=50256
-        if "stop_token" in request.get_json():
-            stop_token = request.get_json()["stop_token"]
+        if "stop_token" in request_json:
+            stop_token = request_json["stop_token"]
             if not isinstance(stop_token, int):
                 return "stop_token must be an integer"
         
         length_penalty = 1 
-        if "length_penalty" in request.get_json():
-            length_penalty = request.get_json()["length_penalty"]
+        if "length_penalty" in request_json:
+            length_penalty = request_json["length_penalty"]
             if not isinstance(length_penalty, float):
                 return "length_penalty must be a float"
         
@@ -184,12 +188,12 @@ class MegatronGenerate(Resource):
             
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()),flush=True)
+                print(json.dumps(request_json),flush=True)
                 print("start time: ", datetime.datetime.now())
             
             try:
                 if beam_width is not None:
-                    MegatronGenerate.send_do_beam_search()  # Tell other ranks we're doing beam_search
+                    self.send_do_beam_search()  # Tell other ranks we're doing beam_search
                     response, response_seg, response_scores = \
                         beam_search_and_post_process(
                         self.model,
@@ -207,7 +211,7 @@ class MegatronGenerate(Resource):
                         "segments": response_seg,
                         "scores": response_scores})
                 else:
-                    MegatronGenerate.send_do_generate()  # Tell other ranks we're doing generate
+                    self.send_do_generate()  # Tell other ranks we're doing generate
                     response, response_seg, response_logprobs, _ = \
                         generate_and_post_process(
                         self.model,
@@ -408,6 +412,21 @@ class MegatronModifyWindowSize(Resource):
             except ValueError as ve:
                 return ve.args[0], 400
             print("end time: ", datetime.datetime.now())
+
+class MegatronGeneralAPI(MegatronGenerate):
+    def __init__(self, model):
+        super().__init__(model)
+
+    @staticmethod
+    def send_do_generate():
+        choice = torch.tensor([GENERAL_API_NUM], dtype=torch.long, device='cuda')
+        torch.distributed.broadcast(choice, 0)
+
+    def put(self):
+        raw_json = request.get_json()
+        required_keys = ["prompts", "tokens_to_generate"]
+
+
 
 
 class MegatronServer(object):
