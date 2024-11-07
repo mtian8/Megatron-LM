@@ -109,6 +109,14 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
 
         # TODO(bnorick): download tokenizer once to lustre and use force offline to make sure all tasks read it from there
         self._tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_model_name_or_path=pretrained_model_name_or_path)
+        # get special tokens
+        self.special_tokens_map = self._tokenizer.special_tokens_map
+        self.special_token_id_list = []
+        for token_name in self.special_tokens_map:
+            self.special_token_id_list.append(getattr(self._tokenizer, token_name + "_id", None))
+        print(f"Special tokens: {self.special_tokens_map}")
+        print(f"Special token ids: {self.special_token_id_list}")
+
         self._vocab = self._tokenizer.get_vocab()
         self._inv_vocab = {token_id: token for token, token_id in self._vocab.items()}
 

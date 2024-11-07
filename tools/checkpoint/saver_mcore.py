@@ -454,6 +454,7 @@ def save_checkpoint(queue, args):
     margs.load = None
     margs.save = args.save_dir
     margs.tensorboard_dir = None
+    margs.wandb_save_dir = None
     margs.tokenizer_model = None
     margs.transformer_impl = args.saver_transformer_impl
 

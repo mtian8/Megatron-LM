@@ -32,7 +32,8 @@ def generate_and_post_process(model,
                               stop_on_eol=False,
                               prevent_newline_after_colon=False,
                               random_seed=-1,
-                              return_logits=False):
+                              return_logits=False,
+                              ignore_special_tokens=False):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
 
@@ -58,7 +59,7 @@ def generate_and_post_process(model,
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
         tokens, prompts_plus_generations, prompts_plus_generations_segments = \
-            detokenize_generations(tokens, lengths, True)
+            detokenize_generations(tokens, lengths, True, ignore_special_tokens)
 
         if return_output_log_probs:
             output_log_probs = output_log_probs.cpu().numpy().tolist()
@@ -163,7 +164,8 @@ def beam_search_and_post_process(model,
                                  stop_token=50256,
                                  num_return_gen=1,
                                  length_penalty=1,
-                                 prevent_newline_after_colon=False):
+                                 prevent_newline_after_colon=False,
+                                 ignore_special_tokens=False):
     """Run beam search and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
 
@@ -181,7 +183,7 @@ def beam_search_and_post_process(model,
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
         lengths = tokens.size(1)*torch.ones(beam_size, dtype=torch.int64, device=torch.cuda.current_device())
-        tokens, prompts_plus_generations, prompts_plus_generations_segments = detokenize_generations(tokens, lengths, True)
+        tokens, prompts_plus_generations, prompts_plus_generations_segments = detokenize_generations(tokens, lengths, True, ignore_special_tokens)
         scores = scores.cpu().numpy().tolist()
         return prompts_plus_generations, prompts_plus_generations_segments, scores
 
@@ -211,3 +213,21 @@ def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_si
     return beam_search_and_return_on_first_stage(model, forward_step, context_tokens_tensor, context_length_tensor,
             beam_size, stop_token=stop_token, num_return_gen=num_return_gen, length_penalty=length_penalty,
             prevent_newline_after_colon=prevent_newline_after_colon)
+
+def tokenize_prompts_api(prompts=None, tokens_to_generate=None,
+                     add_BOS=None, rank=0, ignore_special_tokens=False):
+    """Tokenize prompts and make them avaiable on all ranks."""
+    values = [
+        tokens_to_generate,
+        add_BOS,
+        ignore_special_tokens
+    ]
+    values_float_tensor = broadcast_float_list(len(values), float_list=values)
+    tokens_to_generate = int(values_float_tensor[0].item())
+    add_BOS = bool(values_float_tensor[1].item())
+    ignore_special_tokens = bool(values_float_tensor[2].item())
+
+    context_tokens_tensor, context_length_tensor = tokenize_prompts(
+        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS)
+
+    return context_tokens_tensor, context_length_tensor

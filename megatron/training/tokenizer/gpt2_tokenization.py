@@ -174,6 +174,7 @@ class GPT2Tokenizer(object):
         self.special_tokens = {}
         self.special_tokens_decoder = {}
         self.set_special_tokens(special_tokens)
+        print("Special tokens {}".format(self.special_tokens))
 
     def __len__(self):
         return len(self.encoder) + len(self.special_tokens)

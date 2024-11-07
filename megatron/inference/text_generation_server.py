@@ -8,7 +8,7 @@ from flask_restful import Resource, Api
 from megatron.training import get_args
 from megatron.inference.text_generation import generate_and_post_process
 from megatron.inference.text_generation import beam_search_and_post_process
-from megatron.inference.text_generation.tokenization import tokenize_prompts, detokenize_generations
+from megatron.inference.text_generation.tokenization import tokenize_prompts, detokenize_generations, tokenize_prompts_on_one_rank
 from transformer_engine.pytorch.attention import check_set_window_size
 
 GENERATE_NUM = 0
@@ -25,12 +25,12 @@ class MegatronGenerate(Resource):
 
     @staticmethod
     def send_do_generate():
-        choice = torch.tensor([GENERATE_NUM], dtype=torch.long, device='cuda')
+        choice = torch.tensor(GENERATE_NUM, dtype=torch.long, device='cuda')
         torch.distributed.broadcast(choice, 0)
      
     @staticmethod
     def send_do_beam_search():
-        choice = torch.tensor([BEAM_NUM], dtype=torch.long, device='cuda')
+        choice = torch.tensor(BEAM_NUM, dtype=torch.long, device='cuda')
         torch.distributed.broadcast(choice, 0)
     
     def put(self):
@@ -156,7 +156,7 @@ class MegatronGenerate(Resource):
             if random_seed < 0: 
                 return "random_seed must be a positive integer"
 
-        no_log = not False
+        no_log = False
         if "no_log" in request_json:
             no_log = request_json["no_log"]
             if not isinstance(no_log, bool):
@@ -183,12 +183,24 @@ class MegatronGenerate(Resource):
             length_penalty = request_json["length_penalty"]
             if not isinstance(length_penalty, float):
                 return "length_penalty must be a float"
+
+        ignore_special_tokens = True
+        if "ignore_special_tokens" in request_json:
+            ignore_special_tokens = request_json["ignore_special_tokens"]
+            if not isinstance(ignore_special_tokens, bool):
+                return "ignore_special_tokens must be a boolean value"
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
             
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request_json),flush=True)
+                print("All args:", flush=True)
+                for k, v in request_json.items():
+                    if k == "prompts":
+                        print(f"{k}: {[v0[:10] + '...' for v0 in v]} ", flush=True)
+                    else:
+                        print(f"{k}: {v}", flush=True)
+                # print(json.dumps(request_json),flush=True)
                 print("start time: ", datetime.datetime.now())
             
             try:
@@ -196,15 +208,16 @@ class MegatronGenerate(Resource):
                     self.send_do_beam_search()  # Tell other ranks we're doing beam_search
                     response, response_seg, response_scores = \
                         beam_search_and_post_process(
-                        self.model,
-                        prompts=prompts,
-                        tokens_to_generate=tokens_to_generate,
-                        beam_size = beam_width,
-                        add_BOS=add_BOS,
-                        stop_token=stop_token,
-                        num_return_gen=beam_width,  # Returning whole beam
-                        length_penalty=length_penalty,
-                        prevent_newline_after_colon=prevent_newline_after_colon
+                            self.model,
+                            prompts=prompts,
+                            tokens_to_generate=tokens_to_generate,
+                            beam_size = beam_width,
+                            add_BOS=add_BOS,
+                            stop_token=stop_token,
+                            num_return_gen=beam_width,  # Returning whole beam
+                            length_penalty=length_penalty,
+                            prevent_newline_after_colon=prevent_newline_after_colon,
+                            ignore_special_tokens=ignore_special_tokens
                         )
                     
                     return jsonify({"text": response,
@@ -214,21 +227,23 @@ class MegatronGenerate(Resource):
                     self.send_do_generate()  # Tell other ranks we're doing generate
                     response, response_seg, response_logprobs, _ = \
                         generate_and_post_process(
-                        self.model,
-                        prompts=prompts,
-                        tokens_to_generate=tokens_to_generate,
-                        return_output_log_probs=logprobs,
-                        top_k_sampling=top_k,
-                        top_p_sampling=top_p,
-                        top_p_decay=top_p_decay,
-                        top_p_bound=top_p_bound,
-                        temperature=temperature,
-                        add_BOS=add_BOS,
-                        use_eod_token_for_early_termination=True,
-                        stop_on_double_eol=stop_on_double_eol,
-                        stop_on_eol=stop_on_eol,
-                        prevent_newline_after_colon=prevent_newline_after_colon,
-                        random_seed=random_seed)
+                            self.model,
+                            prompts=prompts,
+                            tokens_to_generate=tokens_to_generate,
+                            return_output_log_probs=logprobs,
+                            top_k_sampling=top_k,
+                            top_p_sampling=top_p,
+                            top_p_decay=top_p_decay,
+                            top_p_bound=top_p_bound,
+                            temperature=temperature,
+                            add_BOS=add_BOS,
+                            use_eod_token_for_early_termination=True,
+                            stop_on_double_eol=stop_on_double_eol,
+                            stop_on_eol=stop_on_eol,
+                            prevent_newline_after_colon=prevent_newline_after_colon,
+                            random_seed=random_seed,
+                            ignore_special_tokens=ignore_special_tokens
+                        )
 
                     return jsonify({"text": response,
                         "segments": response_seg,
@@ -282,28 +297,39 @@ class MegatronTokenize(Resource):
         #     return "Empty prompts require add_BOS=true"
 
 
-        no_log = not False
+        no_log = False
         if "no_log" in request.get_json():
             no_log = request.get_json()["no_log"]
             if not isinstance(no_log, bool):
                 return "no_log must be a boolean value"
 
+        ignore_special_tokens = False
+        if "ignore_special_tokens" in request.get_json():
+            ignore_special_tokens = request.get_json()["ignore_special_tokens"]
+            if not isinstance(ignore_special_tokens, bool):
+                return "ignore_special_tokens must be a boolean value"
+
 
         with lock:  # Need to get lock to keep multiple threads from hitting code
-
+            # self.send_do_tokenize()
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()), flush=True)
+                # print(json.dumps(request.get_json()), flush=True)
                 print("start time: ", datetime.datetime.now())
 
             try:
-                prompts_tokens_tensor, _ = tokenize_prompts(
+                prompts_tokens_tensor, _ = tokenize_prompts_on_one_rank(
                     prompts=texts,
                     tokens_to_generate=0,
                     add_BOS=add_BOS,
-
+                    ignore_special_tokens=ignore_special_tokens
                 )
-                return jsonify({"token_ids": prompts_tokens_tensor.cpu().tolist()})
+                print("After tokenize_prompts", flush=True)
+                cpu_tensor = prompts_tokens_tensor.cpu()
+                # print("After cpu_tensor", flush=True)
+                ret = cpu_tensor.tolist()
+                # print("After tolist", flush=True)
+                return jsonify({"token_ids": ret})
 
             except ValueError as ve:
                 return ve.args[0]
@@ -320,6 +346,7 @@ class MegatronDetokenize(Resource):
         torch.distributed.broadcast(choice, 0)
 
     def put(self):
+
         args = get_args()
 
         if not "tokens" in request.get_json():
@@ -341,18 +368,25 @@ class MegatronDetokenize(Resource):
             if not isinstance(no_log, bool):
                 return "no_log must be a boolean value"
 
-        with lock:  # Need to get lock to keep multiple threads from hitting code
+        ignore_special_tokens = True
+        if "ignore_special_tokens" in request.get_json():
+            ignore_special_tokens = request.get_json()["ignore_special_tokens"]
+            if not isinstance(ignore_special_tokens, bool):
+                return "ignore_special_tokens must be a boolean value"
 
+        with lock:  # Need to get lock to keep multiple threads from hitting code
+            # self.send_do_detokenize()
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
-                print(json.dumps(request.get_json()), flush=True)
+                # print(json.dumps(request.get_json()), flush=True)
                 print("start time: ", datetime.datetime.now())
 
             try:
                 ret_vals = detokenize_generations(
                     tokens_gpu_tensor=tokens,
                     lengths_gpu_tensor=[None] * len(tokens),
-                    return_segments=False
+                    return_segments=False,
+                    ignore_special_tokens=ignore_special_tokens
                 )
                 texts = ret_vals[1]
                 return jsonify({"texts": texts})
