@@ -214,20 +214,3 @@ def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_si
             beam_size, stop_token=stop_token, num_return_gen=num_return_gen, length_penalty=length_penalty,
             prevent_newline_after_colon=prevent_newline_after_colon)
 
-def tokenize_prompts_api(prompts=None, tokens_to_generate=None,
-                     add_BOS=None, rank=0, ignore_special_tokens=False):
-    """Tokenize prompts and make them avaiable on all ranks."""
-    values = [
-        tokens_to_generate,
-        add_BOS,
-        ignore_special_tokens
-    ]
-    values_float_tensor = broadcast_float_list(len(values), float_list=values)
-    tokens_to_generate = int(values_float_tensor[0].item())
-    add_BOS = bool(values_float_tensor[1].item())
-    ignore_special_tokens = bool(values_float_tensor[2].item())
-
-    context_tokens_tensor, context_length_tensor = tokenize_prompts(
-        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS)
-
-    return context_tokens_tensor, context_length_tensor
