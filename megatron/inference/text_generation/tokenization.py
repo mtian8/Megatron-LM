@@ -15,7 +15,6 @@ def detokenize_generations(tokens_gpu_tensor,
                            return_segments,
                            ignore_special_tokens=False):
     """Detokenize the generated tokens."""
-
     args = get_args()
     tokenizer = get_tokenizer()
     prompts_plus_generations = []
@@ -148,22 +147,29 @@ def _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_spe
     # print("Tokenize prompts and batch")
     # Tokenize all the prompts.
     args = get_args()
+    # print(f"Prompts: *{prompts}*")
     tokenizer = get_tokenizer()
     if hasattr(tokenizer, 'eod'):
         eod_token = tokenizer.eod
-    elif hasattr(tokenizer, 'eos_id'):
-        eod_token = tokenizer.eos_id
+    elif hasattr(tokenizer, 'eod_id'):
+        eod_token = tokenizer.eod_id
     else:
         raise AttributeError('No eod token found in Tokenizer')
     if add_BOS:
+        if hasattr(tokenizer, 'bos'):
+            bos_token = tokenizer.bos
+        elif hasattr(tokenizer, 'bos_id'):
+            bos_token = tokenizer.bos_id
+        else:
+            raise AttributeError('No bos token found in Tokenizer')
         # print("Adding BOS")
-        prompts_tokens = [[eod_token] + tokenizer.tokenize(prompt)
+        prompts_tokens = [[bos_token] + tokenizer.tokenize(prompt)
                           for prompt in prompts]
     else:
         prompts_tokens = [tokenizer.tokenize(prompt) for prompt in prompts]
-        if ignore_special_tokens and args.tokenizer_type == "HuggingFaceTokenizer":
-            prompts_tokens = [[token for token in prompt_tokens if token not in tokenizer.special_token_id_list]
-                              for prompt_tokens in prompts_tokens]
+    if ignore_special_tokens and args.tokenizer_type == "HuggingFaceTokenizer":
+        prompts_tokens = [[token for token in prompt_tokens if token not in tokenizer.special_token_id_list]
+                          for prompt_tokens in prompts_tokens]
         # print("Did not add BOS; first token is", prompts_tokens[0][0], "; tokenizer.eod is", eod_token)
         # for special_token in ["cls", "sep", "pad", "eod", "bos", "eos", "mask"]:
             # try:

@@ -67,13 +67,13 @@ def generate_and_post_process(model,
                 output_log_probs[i] = prob[:len(seg)-1]
 
         if return_logits:
-            assert(tokens_to_generate == 0)
+            # assert(tokens_to_generate == 0)
             assert(mpu.get_pipeline_model_parallel_world_size() == 1)
             return prompts_plus_generations, prompts_plus_generations_segments, \
             output_log_probs, tokens, logits
         else:
             return prompts_plus_generations, prompts_plus_generations_segments, \
-            output_log_probs, tokens
+            output_log_probs, tokens, None
 
     return None
 

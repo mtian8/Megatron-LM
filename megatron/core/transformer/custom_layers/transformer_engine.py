@@ -25,6 +25,8 @@ from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.utils import make_sharded_tensors_for_checkpoint
 
 
+from megatron.core.utils import debug, change_debug, use_debug
+
 def get_te_version():
     def get_te_version_str():
         if hasattr(te, '__version__'):
@@ -80,6 +82,8 @@ class TENorm:
             assert hasattr(
                 te.pytorch, "RMSNorm"
             ), "Transformer-Engine >= v0.11 required to use this feature"
+          #  print("Config.layernorm_zero_centered_gamma: ", config.layernorm_zero_centered_gamma)
+          #  print("Eps: ", eps)
             instance = te.pytorch.RMSNorm(
                 hidden_size=hidden_size,
                 eps=eps,
@@ -487,7 +491,7 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
             assert _te_version >= packaging.version.Version(
                 "1.2.0"
             ), f"Transformer-Engine version ({str(_te_version)}) must be >= 1.2.0 to support sliding window attention."
-            extra_kwargs['window_size'] = config.window_size
+            extra_kwargs['window_size'] = tuple(config.window_size)
 
         super().__init__(
             num_attention_heads=self.config.num_attention_heads,

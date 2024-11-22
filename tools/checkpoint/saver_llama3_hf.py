@@ -90,6 +90,7 @@ def save_checkpoint(queue, args):
     def set_hf_layer_state(hf_model, layer_idx, layer_state):
         hf_layer = hf_model.model.layers[layer_idx]
         hf_layer.input_layernorm.weight.copy_(layer_state["input norm weight"])
+        print(layer_idx, layer_state["input norm weight"])
         # hf_layer.input_layernorm.bias.copy_(layer_state["input norm bias"])
         hf_layer.post_attention_layernorm.weight.copy_(layer_state["post norm weight"])
         # hf_layer.post_attention_layernorm.bias.copy_(layer_state["post norm bias"])

@@ -203,54 +203,55 @@ class MegatronGenerate(Resource):
                 # print(json.dumps(request_json),flush=True)
                 print("start time: ", datetime.datetime.now())
             
-            try:
-                if beam_width is not None:
-                    self.send_do_beam_search()  # Tell other ranks we're doing beam_search
-                    response, response_seg, response_scores = \
-                        beam_search_and_post_process(
-                            self.model,
-                            prompts=prompts,
-                            tokens_to_generate=tokens_to_generate,
-                            beam_size = beam_width,
-                            add_BOS=add_BOS,
-                            stop_token=stop_token,
-                            num_return_gen=beam_width,  # Returning whole beam
-                            length_penalty=length_penalty,
-                            prevent_newline_after_colon=prevent_newline_after_colon,
-                            ignore_special_tokens=ignore_special_tokens
-                        )
-                    
-                    return jsonify({"text": response,
-                        "segments": response_seg,
-                        "scores": response_scores})
-                else:
-                    self.send_do_generate()  # Tell other ranks we're doing generate
-                    response, response_seg, response_logprobs, _ = \
-                        generate_and_post_process(
-                            self.model,
-                            prompts=prompts,
-                            tokens_to_generate=tokens_to_generate,
-                            return_output_log_probs=logprobs,
-                            top_k_sampling=top_k,
-                            top_p_sampling=top_p,
-                            top_p_decay=top_p_decay,
-                            top_p_bound=top_p_bound,
-                            temperature=temperature,
-                            add_BOS=add_BOS,
-                            use_eod_token_for_early_termination=True,
-                            stop_on_double_eol=stop_on_double_eol,
-                            stop_on_eol=stop_on_eol,
-                            prevent_newline_after_colon=prevent_newline_after_colon,
-                            random_seed=random_seed,
-                            ignore_special_tokens=ignore_special_tokens
-                        )
 
-                    return jsonify({"text": response,
-                        "segments": response_seg,
-                        "logprobs": response_logprobs})
+            if beam_width is not None:
+                self.send_do_beam_search()  # Tell other ranks we're doing beam_search
+                response, response_seg, response_scores = \
+                    beam_search_and_post_process(
+                        self.model,
+                        prompts=prompts,
+                        tokens_to_generate=tokens_to_generate,
+                        beam_size = beam_width,
+                        add_BOS=add_BOS,
+                        stop_token=stop_token,
+                        num_return_gen=beam_width,  # Returning whole beam
+                        length_penalty=length_penalty,
+                        prevent_newline_after_colon=prevent_newline_after_colon,
+                        ignore_special_tokens=ignore_special_tokens
+                    )
 
-            except ValueError as ve:
-                return ve.args[0], 400
+                return jsonify({"text": response,
+                    "segments": response_seg,
+                    "scores": response_scores})
+            else:
+                self.send_do_generate()  # Tell other ranks we're doing generate
+                response, response_seg, response_logprobs, _, response_logits = \
+                    generate_and_post_process(
+                        self.model,
+                        prompts=prompts,
+                        tokens_to_generate=tokens_to_generate,
+                        return_output_log_probs=logprobs,
+                        top_k_sampling=top_k,
+                        top_p_sampling=top_p,
+                        top_p_decay=top_p_decay,
+                        top_p_bound=top_p_bound,
+                        temperature=temperature,
+                        add_BOS=add_BOS,
+                        use_eod_token_for_early_termination=True,
+                        stop_on_double_eol=stop_on_double_eol,
+                        stop_on_eol=stop_on_eol,
+                        prevent_newline_after_colon=prevent_newline_after_colon,
+                        random_seed=random_seed,
+                        ignore_special_tokens=ignore_special_tokens,
+                        return_logits=logprobs
+                    )
+                # print("logits", response_logits)
+                return jsonify({"text": response,
+                    "segments": response_seg,
+                    "logprobs": response_logprobs,
+                            "logits": response_logits})
+
+
             print("end time: ", datetime.datetime.now())
 
 
@@ -324,7 +325,7 @@ class MegatronTokenize(Resource):
                     add_BOS=add_BOS,
                     ignore_special_tokens=ignore_special_tokens
                 )
-                print("After tokenize_prompts", flush=True)
+                # print("After tokenize_prompts", flush=True)
                 cpu_tensor = prompts_tokens_tensor.cpu()
                 # print("After cpu_tensor", flush=True)
                 ret = cpu_tensor.tolist()
@@ -378,6 +379,9 @@ class MegatronDetokenize(Resource):
             # self.send_do_detokenize()
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
+                js = request.get_json()
+                js.pop("tokens")
+                print(js, flush=True)
                 # print(json.dumps(request.get_json()), flush=True)
                 print("start time: ", datetime.datetime.now())
 

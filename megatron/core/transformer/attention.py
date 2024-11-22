@@ -1,4 +1,5 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+import os.path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -39,6 +40,7 @@ if HAVE_TE:
 else:
     SplitAlongDim = None
 
+from megatron.core.utils import debug, use_debug, change_debug
 
 @dataclass
 class SelfAttentionSubmodules:
@@ -300,7 +302,10 @@ class Attention(MegatronModule, ABC):
                 config=self.config,
                 cu_seqlens=cu_seqlens_kv,
             )
-
+            debug("q pos emb: ", q_pos_emb[..., :6])
+            debug("k pos emb: ", k_pos_emb[..., :6])
+            debug("Post rope query: ", query[..., :6])
+            debug("Post rope key:   ", key[..., :6])
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
@@ -335,13 +340,17 @@ class Attention(MegatronModule, ABC):
             # t is the pack size = sum (sq_i)
             # note that batch is a dummy dimension in the packed case
             core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)
-
+        if not os.path.exists("te_attn_out_fp16.txt"):
+            with open("te_attn_out_fp16.txt", "w") as f:
+                import json
+                json.dump(core_attn_out.cpu().numpy().tolist(), f)
+        debug("Core attention out", core_attn_out[..., :6])
         # =================
         # Output. [sq, b, h]
         # =================
 
         output, bias = self.linear_proj(core_attn_out)
-
+        debug("Linear proj Output: ", output[..., :6])
         return output, bias
 
 
@@ -475,7 +484,8 @@ class SelfAttention(Attention):
         """
         # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
         mixed_qkv, _ = self.linear_qkv(hidden_states)
-
+        debug("Mixed QKV: ", mixed_qkv[..., :6])
+        debug("Mixed QKV shape: ", mixed_qkv.size())
         # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
         new_tensor_shape = mixed_qkv.size()[:-1] + (
             self.num_query_groups_per_partition,
@@ -485,7 +495,7 @@ class SelfAttention(Attention):
             ),
         )
         mixed_qkv = mixed_qkv.view(*new_tensor_shape)
-
+        debug("Mixed QKV reshaped: ", mixed_qkv.shape)
         split_arg_list = [
             (
                 self.num_attention_heads_per_partition
@@ -495,7 +505,7 @@ class SelfAttention(Attention):
             self.hidden_size_per_attention_head,
             self.hidden_size_per_attention_head,
         ]
-
+        # input()
         if SplitAlongDim is not None:
 
             # [sq, b, ng, (np/ng + 2) * hn] --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
@@ -524,7 +534,9 @@ class SelfAttention(Attention):
 
         if self.config.test_mode:
             self.run_realtime_tests()
-
+        debug("Query: ", query[..., :6])
+        debug("Key:   ", key[..., :6])
+        debug("Value: ", value[..., :6])
         return query, key, value
 
 

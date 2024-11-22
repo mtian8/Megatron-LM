@@ -26,6 +26,16 @@ from megatron.core.dist_checkpointing.mapping import ShardedTensor
 logger = logging.getLogger(__name__)
 
 
+use_debug = True
+def debug(*args, **kwargs):
+    return
+    if use_debug and torch.distributed.get_rank() == 0:
+        print("[DEBUG] ", *args, **kwargs)
+
+def change_debug(to):
+    global use_debug
+    use_debug = to
+
 def ensure_divisibility(numerator, denominator):
     """Ensure that numerator is divisible by the denominator."""
     assert numerator % denominator == 0, "{} is not divisible by {}".format(numerator, denominator)

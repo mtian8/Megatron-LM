@@ -141,12 +141,40 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
     def tokenize(self, text):
         return self._tokenizer(text).input_ids
 
+    def pure_tokenize(self, text):
+        """
+        Remove special tokens and leading spaces from the tokenized text.
+        """
+        input_ids = self._tokenizer(text, add_special_tokens=False).input_ids
+        leading_space_token_id = self._tokenizer.convert_tokens_to_ids("▁")
+        while input_ids[0] == leading_space_token_id:
+            input_ids = input_ids[1:]
+        return input_ids
+
     def detokenize(self, token_ids):
         return self._tokenizer.decode(token_ids)
 
     @property
     def eod(self):
         return self._tokenizer.eos_token_id
+
+    @property
+    def bos(self):
+        return self._tokenizer.bos_token_id
+
+    @property
+    def eol(self):
+        if hasattr(self._tokenizer, 'eol_token_id'):
+            return self._tokenizer.eol_token_id
+        # print("\\n token: ", self.pure_tokenize('\n'))
+        # print(".\\n token: ", self.pure_tokenize(".\n"))
+        return self.pure_tokenize('\n')[0]
+
+    @property
+    def double_eol(self):
+        if hasattr(self._tokenizer, 'double_eol_token_id'):
+            return self._tokenizer.double_eol_token_id
+        return self.pure_tokenize('\n\n')[0]
 
 
 class _BertWordPieceTokenizer(MegatronTokenizer):

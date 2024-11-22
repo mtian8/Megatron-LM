@@ -133,6 +133,16 @@ def generate_tokens_probs_and_return_on_first_stage(
     args = get_args()
     tokenizer = get_tokenizer()
 
+    # start of data parallel
+
+    # calculate how many samples our rank should take
+    global_batch_size = tokens.size(0)
+    world_size = mpu.get_data_parallel_world_size()
+
+    samples_per_rank = global_batch_size // world_size
+    remainder = global_batch_size % world_size
+
+
     batch_size = tokens.size(0)
     min_prompt_length = lengths.min().item()
     max_sequence_length = tokens.size(1)
@@ -164,6 +174,8 @@ def generate_tokens_probs_and_return_on_first_stage(
 
     # Log probability of the sequence (prompt + generated tokens).
     output_log_probs = None
+    output_logit_seq = None
+    logit_seq = []
     output_log_probs_size = (batch_size, max_sequence_length - 1)
     # Lengths of generated seuquence including including prompts.
     generated_sequence_lengths = None
@@ -188,17 +200,27 @@ def generate_tokens_probs_and_return_on_first_stage(
         attention_mask, position_ids = _build_attention_mask_and_position_ids(
             tokens)
         prev_context_length = 0
+        w = True
         for context_length in range(min_prompt_length, max_sequence_length):
 
             # Pick the slice that we need to pass through the network.
             tokens2use = tokens[:, prev_context_length:context_length]
+            # if w and torch.distributed.get_rank() == 0:
+                # print("Tokens2use:", tokens2use.size())
+                # print("first 5 tokens:", tokens2use[0, :5])
+                # print("last 5 tokens:", tokens2use[0, -5:])
             positions2use = position_ids[:, prev_context_length:context_length]
             # attention_mask2use = attention_mask[
             #     ..., prev_context_length:context_length, :context_length]
             attention_mask2use = attention_mask
             # logits will be meanigful only in the last pipeline stage.
             logits = forward_step(tokens2use, positions2use, attention_mask2use)
-
+            # if torch.distributed.get_rank() == 0:
+            #     if w:
+                    # print("Logits:", logits[:, -1, :10])
+                    # w = input()
+                    # if len(w) == 0:
+                    #     w = False
             if mpu.is_pipeline_last_stage():
                 if prevent_newline_after_colon:
                     logits[tokens2use[:, -1] == tokenizer.tokenize(':')[0], -1, tokenizer.tokenize('\n')[0]] = -1e10 # disable "\n" after ":"
@@ -239,6 +261,8 @@ def generate_tokens_probs_and_return_on_first_stage(
                         output_log_probs[:,
                                          prev_context_length:context_length] = \
                             torch.gather(log_probs, 2, indices).squeeze(2)
+                    logit_seq.append(logits[:, -1:, :])
+
 
             # Update the tokens on the first stage so the next input to
             # the network is correct.
@@ -254,12 +278,12 @@ def generate_tokens_probs_and_return_on_first_stage(
                 # TODO(rprenger) These stopping methods are tokenizer dependent
                 # instead tokenization should be in the inference loop so stop sequences can be used
                 if stop_on_double_eol:
-                    hit_double_eol = (new_sample == 628).byte() & started.byte()
-                    hit_two_eols = (new_sample == 198).byte() & (tokens[:, context_length-1] == 198).byte() & started.byte()
+                    hit_double_eol = (new_sample == getattr(tokenizer, "double_eol", tokenizer.tokenize("\n\n")[0])).byte() & started.byte()
+                    hit_two_eols = (new_sample == getattr(tokenizer, "eol", tokenizer.tokenize("\n")[0])).byte() & (tokens[:, context_length-1] == getattr(tokenizer, "eol", tokenizer.tokenize("\n")[0])).byte() & started.byte()
                     done_token = hit_double_eol | hit_two_eols
                 elif stop_on_eol:
-                    hit_double_eol = (new_sample == 628).byte() & started.byte()
-                    hit_eol = (new_sample == 198).byte() & started.byte()
+                    hit_double_eol = (new_sample == getattr(tokenizer, "double_eol", tokenizer.tokenize("\n\n")[0])).byte() & started.byte()
+                    hit_eol = (new_sample == getattr(tokenizer, "eol", tokenizer.tokenize("\n")[0])).byte() & started.byte()
                     done_token = hit_double_eol | hit_eol
                 else:
                     done_token = (new_sample == termination_id).byte() & \
@@ -280,9 +304,22 @@ def generate_tokens_probs_and_return_on_first_stage(
     # ===================================================
 
     tokens = tokens[:, :(context_length + 1)]
+    # print("000")
+    # print(logit_seq)
+    # print("111")
     if mpu.is_pipeline_last_stage():
         if return_output_log_probs:
             output_log_probs = output_log_probs[:, :context_length]
+            output_logit_seq = []
+            for i in range(len(logit_seq[0])):  # batch size
+                output_logit_seq.append([])
+                for j in range(len(logit_seq)): # bulk
+                    for k in range(len(logit_seq[j][i])):  # context length
+                        output_logit_seq[i].append(logit_seq[j][i][k].cpu().tolist())
+            # print(output_logit_seq)
+            # output_logit_seq = torch.tensor(output_logit_seq, dtype=torch.float32)
+            # print("2222")
+            # print(output_logit_seq.shape)
 
     # ======================================
     # Broadcast to the first pipeline stage.
@@ -295,7 +332,8 @@ def generate_tokens_probs_and_return_on_first_stage(
         output_log_probs = broadcast_from_last_to_first_pipeline_stage(
             output_log_probs_size, torch.float32, output_log_probs)
 
-    return tokens, generated_sequence_lengths, output_log_probs, None
+
+    return tokens, generated_sequence_lengths, output_log_probs, output_logit_seq
 
 def beam_search_and_return_on_first_stage(model, forward_step, tokens, lengths, beam_size, stop_token, num_return_gen, length_penalty, prevent_newline_after_colon=True):
     args = get_args()

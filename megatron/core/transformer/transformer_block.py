@@ -26,6 +26,8 @@ from megatron.core.utils import (
     make_viewless_tensor,
 )
 
+from megatron.core.utils import debug, change_debug, use_debug
+
 try:
     from megatron.core.transformer.custom_layers.transformer_engine import (
         TEDelayedScaling,
@@ -346,6 +348,9 @@ class TransformerBlock(MegatronModule):
         if not self.pre_process:
             # See set_input_tensor()
             hidden_states = self.input_tensor
+        w = use_debug
+        change_debug(w and torch.distributed.get_rank() == 0)
+        debug(f"Transformer Input hidden states: ", hidden_states[..., :6])
 
         # Viewless tensor.
         # - We only need to create a viewless tensor in the case of micro batch
@@ -410,7 +415,11 @@ class TransformerBlock(MegatronModule):
                 )
             else:
                 for l_no, layer in enumerate(self.layers):
+                    change_debug(use_debug and l_no == 0)
                     with self.offload_context:
+                        # print input hidden states
+                        # if torch.distributed.get_rank() == 0:
+                        #     print(f"[r. {torch.distributed.get_rank()}] [l. {l_no}]  input hidden_states: {hidden_states[..., :8]}")
                         if (len(self.cuda_graphs) == 0) or (not self.training):
                             hidden_states, context = layer(
                                 hidden_states=hidden_states,
@@ -447,6 +456,9 @@ class TransformerBlock(MegatronModule):
                     ):
                         hidden_states = self.group_prefetch_offload_commit_async(hidden_states)
 
+                    debug(f"[r. {torch.distributed.get_rank()}] [l. {l_no}] output hidden_states: {hidden_states[..., :8]}")
+                    # print(f"[r. {torch.distributed.get_rank()}] [l. {l_no}] output hidden_states: {hidden_states[..., :10]}")
+
         # Final layer norm.
         if self.final_layernorm is not None:
             hidden_states = self.final_layernorm(hidden_states)
@@ -458,7 +470,10 @@ class TransformerBlock(MegatronModule):
                 requires_grad=True,
                 keep_graph=True,
             )
-
+        change_debug(w and torch.distributed.get_rank() == 0)
+        debug(f"[r. {torch.distributed.get_rank()}] Final hidden_states: ", hidden_states[..., :8])
+        change_debug(False)
+        # print(f"[r. {torch.distributed.get_rank()}] Final hidden_states: ", hidden_states[..., :10])
         return hidden_states
 
     def sharded_state_dict(

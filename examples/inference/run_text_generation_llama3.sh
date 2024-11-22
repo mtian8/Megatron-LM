@@ -4,7 +4,7 @@ export NCCL_IB_SL=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_APPLY_QK_LAYER_SCALING=0
 export TRITON_LIBCUDA_PATH=/usr/local/cuda/compat/lib.real
-DISTRIBUTED_ARGS="--nproc_per_node 1 \
+DISTRIBUTED_ARGS="--nproc_per_node 4 \
                   --nnodes 1 \
                   --node_rank 0 \
                   --master_addr 0.0.0.0 \
@@ -20,12 +20,18 @@ fi
 # Assign command-line arguments to variables
 CHECKPOINT=$1
 TOKENIZER_MODEL=$2
+ROPE_BASE=5000000
+if [ -z "$3" ]; then
+  echo "Using default ROPE_BASE: $ROPE_BASE"
+else
+  ROPE_BASE=$3
+fi
 export NVTE_FLASH_ATTN=1
 export NVTE_FUSED_ATTN=0
-export TORCHINDUCTOR_CACHE_DIR=/projects/bcdz/mtian8/tmp
+export TORCHINDUCTOR_CACHE_DIR=/projects/bbzy/yufengd4/tmp
 #     --window-size 1024 0 \
 # pip install flask-restful
-
+echo "Running llama3-8b model with checkpoint: ${CHECKPOINT} and tokenizer model: ${TOKENIZER_MODEL}"
 torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --use-checkpoint-args \
       --disable-bias-linear \
@@ -34,7 +40,6 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --transformer-impl transformer_engine \
       --normalization RMSNorm \
       --group-query-attention \
-      --num-query-groups 32 \
       --no-masked-softmax-fusion \
       --attention-softmax-in-fp32 \
       --attention-dropout 0.0 \
@@ -42,18 +47,11 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --untie-embeddings-and-output-weights \
       --position-embedding-type rope \
       --rotary-percent 1.0 \
-      --rotary-base 8000000 \
+      --rotary-base $ROPE_BASE \
       --use-rotary-position-embeddings \
       --swiglu \
-      --tensor-model-parallel-size 1  \
-      --pipeline-model-parallel-size 1  \
-      --num-layers 32  \
-      --hidden-size 4096  \
-      --ffn-hidden-size 11008 \
       --load ${CHECKPOINT}  \
-      --num-attention-heads 32  \
       --max-position-embeddings 131072  \
-      --bf16  \
+      --fp16  \
       --micro-batch-size 1  \
-      --seq-length 131072 \
-      --window-size 4096 0 
+      --seq-length 131072

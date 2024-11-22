@@ -16,6 +16,7 @@ from megatron.core.transformer.spec_utils import ModuleSpec, build_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.utils import make_viewless_tensor
 
+from megatron.core.utils import debug, use_debug, change_debug
 
 @dataclass
 class TransformerLayerSubmodules:
@@ -173,7 +174,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # Optional Input Layer norm
         input_layernorm_output = self.input_layernorm(hidden_states)
-
+        debug("Layer norm hidden states:", input_layernorm_output[..., :6])
         # Self attention.
         attention_output_with_bias = self.self_attention(
             input_layernorm_output,
@@ -182,7 +183,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             rotary_pos_emb=rotary_pos_emb,
             packed_seq_params=packed_seq_params,
         )
-
+        debug("After self attention:", attention_output_with_bias[0][..., :6])
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         with self.bias_dropout_add_exec_handler():
@@ -219,10 +220,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # Optional Layer norm post the cross-attention.
         pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
-
+        debug("After post attention layer norm:", pre_mlp_layernorm_output[..., :6])
         # MLP.
         mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
-
+        debug("After MLP:", mlp_output_with_bias[0][..., :6])
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         with self.bias_dropout_add_exec_handler():

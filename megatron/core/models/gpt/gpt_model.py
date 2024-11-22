@@ -62,6 +62,8 @@ class GPTModel(LanguageModule):
             log_config_to_disk(config, locals(), prefix=type(self).__name__)
 
         self.transformer_layer_spec: ModuleSpec = transformer_layer_spec
+        print("Transformer Layer Spec: ", transformer_layer_spec)
+
         self.vocab_size = vocab_size
         self.max_sequence_length = max_sequence_length
         self.pre_process = pre_process
