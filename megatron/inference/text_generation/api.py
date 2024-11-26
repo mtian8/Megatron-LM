@@ -6,7 +6,7 @@
 import torch
 
 from megatron.core import mpu
-from .communication import broadcast_float_list
+from .communication import broadcast_float_list, broadcast_int_list
 from .generation import (
         generate_tokens_probs_and_return_on_first_stage,
         score_and_return_on_first_stage,
@@ -15,6 +15,7 @@ from .tokenization import (
     tokenize_prompts,
     detokenize_generations)
 from .forward_step import ForwardStep
+from transformer_engine.pytorch.attention import check_set_window_size
 
 def generate_and_post_process(model,
                               forward_step=ForwardStep,
@@ -214,3 +215,14 @@ def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_si
             beam_size, stop_token=stop_token, num_return_gen=num_return_gen, length_penalty=length_penalty,
             prevent_newline_after_colon=prevent_newline_after_colon)
 
+def modify_window_size(model, window_size=None):
+    """Modify the window size of the model."""
+    if window_size is None:
+        window_size = (-1, 0)
+    values = window_size
+    values_int_tensor = broadcast_int_list(len(values), int_list=values)
+    window_size = (values_int_tensor[0].item(), values_int_tensor[1].item())
+    for layer in model._modules["module"].decoder.layers:
+        attn = layer.self_attention.core_attention
+        attn.window_size = check_set_window_size(attn.attn_mask_type, window_size)
+    return

@@ -17,6 +17,7 @@ from megatron.training.yaml_arguments import core_transformer_config_from_yaml
 from megatron.inference.text_generation_server import MegatronServer
 from megatron.inference.text_generation import generate_and_post_process
 from megatron.inference.text_generation import beam_search_and_post_process
+from megatron.inference.text_generation import modify_window_size
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.models.llama.llama_layer_specs import (
     get_llama_layer_local_spec,
@@ -132,5 +133,10 @@ if __name__ == "__main__":
         elif choice.item() == 1:
             try:
                 beam_search_and_post_process(model)
+            except ValueError as ve:
+                pass
+        elif choice.item() == 4:
+            try:
+                modify_window_size(model)
             except ValueError as ve:
                 pass

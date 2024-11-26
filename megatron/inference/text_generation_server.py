@@ -6,10 +6,10 @@ import threading
 from flask import Flask, request, jsonify, current_app
 from flask_restful import Resource, Api
 from megatron.training import get_args
-from megatron.inference.text_generation import generate_and_post_process
+from megatron.inference.text_generation import generate_and_post_process, modify_window_size
 from megatron.inference.text_generation import beam_search_and_post_process
 from megatron.inference.text_generation.tokenization import tokenize_prompts, detokenize_generations, tokenize_prompts_on_one_rank
-from transformer_engine.pytorch.attention import check_set_window_size
+
 
 GENERATE_NUM = 0
 BEAM_NUM = 1
@@ -410,7 +410,7 @@ class MegatronModifyWindowSize(Resource):
 
     @staticmethod
     def send_do_modify():
-        choice = torch.tensor([MODIFY_WINDOW_SIZE_NUM], dtype=torch.long, device='cuda')
+        choice = torch.tensor(MODIFY_WINDOW_SIZE_NUM, dtype=torch.long, device='cuda')
         torch.distributed.broadcast(choice, 0)
 
     def put(self):
@@ -435,16 +435,14 @@ class MegatronModifyWindowSize(Resource):
                 return "no_log must be a boolean value"
 
         with lock:  # Need to get lock to keep multiple threads from hitting code
-
+            self.send_do_modify()
             if not no_log:
                 print("request IP: " + str(request.remote_addr))
                 print(json.dumps(request.get_json()), flush=True)
                 print("start time: ", datetime.datetime.now())
 
             try:
-                for layer in self.model._modules["module"].decoder.layers:
-                    attn = layer.self_attention.core_attention
-                    attn.window_size = check_set_window_size(attn.attn_mask_type, ws)
+                modify_window_size(self.model, ws)
                 return jsonify({"texts": "success"})
 
             except ValueError as ve:
