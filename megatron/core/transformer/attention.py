@@ -340,10 +340,6 @@ class Attention(MegatronModule, ABC):
             # t is the pack size = sum (sq_i)
             # note that batch is a dummy dimension in the packed case
             core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)
-        if not os.path.exists("te_attn_out_fp16.txt"):
-            with open("te_attn_out_fp16.txt", "w") as f:
-                import json
-                json.dump(core_attn_out.cpu().numpy().tolist(), f)
         debug("Core attention out", core_attn_out[..., :6])
         # =================
         # Output. [sq, b, h]

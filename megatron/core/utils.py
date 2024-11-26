@@ -33,6 +33,8 @@ def debug(*args, **kwargs):
         print("[DEBUG] ", *args, **kwargs)
 
 def change_debug(to):
+    if torch.distributed.get_rank() != 0:
+        return
     global use_debug
     use_debug = to
 
