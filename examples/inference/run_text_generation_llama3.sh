@@ -33,6 +33,7 @@ export TORCHINDUCTOR_CACHE_DIR=/projects/bbzy/yufengd4/tmp
 # pip install flask-restful
 echo "Running llama3-8b model with checkpoint: ${CHECKPOINT} and tokenizer model: ${TOKENIZER_MODEL}"
 torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
+      --distributed-timeout-minutes 1440 \
       --use-checkpoint-args \
       --disable-bias-linear \
       --tokenizer-type HuggingFaceTokenizer \
