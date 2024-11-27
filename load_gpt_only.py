@@ -5,7 +5,7 @@ import torch
 from functools import partial
 
 from typing import Union
-from megatron.training import get_args
+from megatron.training import get_args, get_model
 from megatron.training import print_rank_0
 from megatron.training import get_timers
 from megatron.training import get_tokenizer
@@ -15,6 +15,7 @@ from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegat
 from megatron.core.datasets.utils import get_blend_from_list
 from megatron.core.datasets.gpt_dataset import GPTDatasetConfig
 from megatron.core.datasets.gpt_dataset import MockGPTDataset, GPTDataset
+from megatron.training.initialize import initialize_megatron
 import megatron.legacy.model
 from megatron.core.models.gpt import GPTModel
 from megatron.training import pretrain
@@ -253,33 +254,7 @@ def core_gpt_dataset_config_from_args(args):
     )
 
 
-# def train_valid_test_datasets_provider(train_val_test_num_samples):
-#     """Build the train test and validation datasets.
 
-#     Args:
-#         train_val_test_num_samples : A list containing the number of samples in train test and validation.
-#     """
-#     args = get_args()
-
-#     config = core_gpt_dataset_config_from_args(args)
-
-#     if args.mock_data:
-#         dataset_type = MockGPTDataset
-#     else:
-#         dataset_type = GPTDataset
-
-#     print_rank_0("> building train, validation, and test datasets for GPT ...")
-
-#     train_ds, valid_ds, test_ds = BlendedMegatronDatasetBuilder(
-#         dataset_type,
-#         train_val_test_num_samples,
-#         is_dataset_built_on_rank,
-#         config
-#     ).build()
-
-#     print_rank_0("> finished creating GPT datasets ...")
-
-#     return train_ds, valid_ds, test_ds
 
 def instruction_train_valid_test_datasets_provider(num_samples):
     args = get_args()
@@ -327,11 +302,34 @@ def instruction_train_valid_test_datasets_provider(num_samples):
     return train_ds, valid_ds, test_ds
 
 
+def load_only(
+    train_valid_test_dataset_provider,
+    model_provider,
+    model_type,
+    forward_step_func,
+    process_non_loss_data_func=None,
+    extra_args_provider=None,
+    args_defaults={},
+    get_embedding_ranks=None,
+    get_position_embedding_ranks=None,
+):
+    
+    initialize_megatron(
+        extra_args_provider=extra_args_provider,
+        args_defaults=args_defaults,
+        get_embedding_ranks=get_embedding_ranks,
+        get_position_embedding_ranks=get_position_embedding_ranks
+    )
+
+    args = get_args()
+    model = get_model(model_provider, model_type)
+    return model
+
+
 if __name__ == "__main__":
     # Temporary for transition to core datasets
     instruction_train_valid_test_datasets_provider.is_distributed = True
-
-    pretrain(
+    model = load_only(
         instruction_train_valid_test_datasets_provider,
         model_provider,
         ModelType.encoder_or_decoder,

@@ -42,7 +42,7 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --untie-embeddings-and-output-weights \
       --position-embedding-type rope \
       --rotary-percent 1.0 \
-      --rotary-base 8000000 \
+      --rotary-base 2076061 \
       --use-rotary-position-embeddings \
       --swiglu \
       --tensor-model-parallel-size 1  \
@@ -52,8 +52,38 @@ torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
       --ffn-hidden-size 11008 \
       --load ${CHECKPOINT}  \
       --num-attention-heads 32  \
-      --max-position-embeddings 131072  \
+      --max-position-embeddings 81920  \
       --bf16  \
       --micro-batch-size 1  \
-      --seq-length 131072 \
-      --window-size 4096 0 
+      --seq-length 81920 \
+
+# torchrun $DISTRIBUTED_ARGS tools/run_text_generation_server.py   \
+#       --use-checkpoint-args \
+#       --disable-bias-linear \
+#       --tokenizer-type HuggingFaceTokenizer \
+#       --tokenizer-model ${TOKENIZER_MODEL} \
+#       --transformer-impl transformer_engine \
+#       --normalization RMSNorm \
+#       --group-query-attention \
+#       --num-query-groups 8 \
+#       --no-masked-softmax-fusion \
+#       --attention-softmax-in-fp32 \
+#       --attention-dropout 0.0 \
+#       --hidden-dropout 0.0 \
+#       --untie-embeddings-and-output-weights \
+#       --position-embedding-type rope \
+#       --rotary-percent 1.0 \
+#       --rotary-base 1000000 \
+#       --use-rotary-position-embeddings \
+#       --swiglu \
+#       --tensor-model-parallel-size 1  \
+#       --pipeline-model-parallel-size 1  \
+#       --num-layers 32  \
+#       --hidden-size 4096  \
+#       --ffn-hidden-size 14336 \
+#       --load ${CHECKPOINT}  \
+#       --num-attention-heads 32  \
+#       --max-position-embeddings 32768  \
+#       --bf16  \
+#       --micro-batch-size 1  \
+#       --seq-length 32768 \
