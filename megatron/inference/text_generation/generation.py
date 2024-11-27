@@ -42,7 +42,7 @@ def score_and_return_on_first_stage(model, tokens, lengths):
         warnings.warn("Length of prompt longer than allowed. Undertermined behavior may happen.")
         # raise ValueError("Length of prompt + tokens_to_generate longer than allowed")
 
-    if max_prompt_length * batch_size > args.max_tokens_to_oom:
+    if args.max_tokens_to_oom >= 0 and max_prompt_length * batch_size > args.max_tokens_to_oom:
         raise ValueError("Too many tokens.  " + str(max_prompt_length*batch_size)+ " is greater than "+str(args.max_tokens_to_oom))
 
     # forward step.
@@ -151,7 +151,7 @@ def generate_tokens_probs_and_return_on_first_stage(
         warnings.warn("Length of prompt + tokens_to_generate longer than allowed. Undertermined behavior may happen.")
         # raise ValueError("Length of prompt + tokens_to_generate longer than allowed")
 
-    if max_sequence_length * batch_size > args.max_tokens_to_oom:
+    if args.max_tokens_to_oom >= 0 and max_sequence_length * batch_size > args.max_tokens_to_oom:
         raise ValueError("Too many tokens.  " + str(max_sequence_length*batch_size)+ " is greater than "+str(args.max_tokens_to_oom))
 
     # forward step.
