@@ -509,12 +509,14 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
             layer_number=layer_number,
             **extra_kwargs,
         )
-
-        def hacked_log(*args, **kwargs):
-            print("[INFO] ", *args, **kwargs)
+        nvte_debug_level = int(os.getenv('NVTE_DEBUG_LEVEL', 0))
+        def hacked_log(*args, **kwargs): 
+            if nvte_debug_level > 0:
+                print(f"[NCCL INFO] ", *args, **kwargs)
 
         def hacked_debug(*args, **kwargs):
-            print("[DEBUG] ", *args, **kwargs)
+            if nvte_debug_level > 1:
+                print("[DEBUG] ", *args, **kwargs)
 
         # self.logger.info = hacked_log
         # self.logger.debug = hacked_debug
@@ -556,7 +558,6 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
         if _te_version < packaging.version.Version("1.9.0"):
             if packed_seq_kwargs.get("window_size") is None and self.window_size is not None:
                 packed_seq_kwargs["window_size"] = tuple(self.window_size)
-        # print("Packed seq kwargs", packed_seq_kwargs)
         if self.te_forward_mask_type:
             if qkv_format == 'thd' and _te_version >= packaging.version.Version("1.7.0"):
                 # thd format uses flash attention with cuDNN kernel which requires is_padding=True, so the only
