@@ -589,8 +589,7 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
             )
 
         if self.config.apply_rope_fusion and qkv_format == 'bshd':
-            core_attn_out = core_attn_out.transpose(0, 1)
-
+            return core_attn_out.transpose(0, 1)
         else:
             return core_attn_out
 
