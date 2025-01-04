@@ -49,6 +49,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     parser = _add_experimental_args(parser)
     parser = _add_one_logger_args(parser)
     parser = _add_config_logger_args(parser)
+    parser = _add_dkernel_args(parser)
 
     # Custom arguments.
     if extra_args_provider is not None:
@@ -648,8 +649,24 @@ def core_transformer_config_from_args(args, config_class=None):
         kw_args['num_query_groups'] = None
     kw_args['config_logger_dir'] = args.config_logger_dir
 
+    kw_args['sparse_max_seq_len'] = args.seq_length
+
     # Return config.
     return config_class(**kw_args)
+
+
+def _add_dkernel_args(parser):
+    group = parser.add_argument_group(title='dkernel')
+    group.add_argument("--sparse-block-size", default=64, type=int, dest="sparse_block_size")
+    group.add_argument("--sparse-local-blocks", default=32, type=int, dest="sparse_local_blocks")
+    group.add_argument("--sparse-vertical-stride", default=8, type=int, dest="sparse_vertical_stride")
+    group.add_argument("--sparse-homo-head", action="store_true", dest="sparse_homo_head")
+    group.add_argument("--sparse-num-dense-heads", default=0, type=int, dest="sparse_num_dense_heads")
+    group.add_argument("--sparse-active-head-range", default=None, type=int, nargs=2, dest="sparse_active_head_range")
+    group.add_argument("--sparse-head-sliding-offset", default=0, type=int, dest="sparse_head_sliding_offset")
+    group.add_argument("--sparse-block-m", default=None, type=int, dest="sparse_block_m")
+    group.add_argument("--sparse-block-n", default=None, type=int, dest="sparse_block_n")
+    return parser
 
 
 def _add_transformer_engine_args(parser):
@@ -676,7 +693,7 @@ def _add_transformer_engine_args(parser):
                        help='Execute wgrad in higher precision even for FP8 runs',
                        dest='fp8_wgrad')
     group.add_argument('--transformer-impl', default='transformer_engine',
-                       choices=['local', 'transformer_engine'],
+                       choices=['local', 'transformer_engine', 'dkernel'],
                        help='Which Transformer implementation to use.')
     group.add_argument('--window-size', type=int, nargs=2, default=None, help='Sliding window size for local attention')
     return parser

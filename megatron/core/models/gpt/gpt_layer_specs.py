@@ -40,7 +40,45 @@ except ImportError:
 
     warnings.warn(f'Apex is not installed. Falling back to Torch LayerNorm')
     LNImpl = WrappedTorchLayerNorm
+try:
+    from megatron.core.transformer.custom_layers.dkernel import DKernelLocalStrideSparseAttention
+    HAVE_DKERNEL = True
+except ImportError:
+    import warnings
+    from megatron.core.transformer.torch_layer_norm import WrappedTorchLayerNorm
 
+    # warnings.warn(f'DKernel is not installed. ')
+    HAVE_DKERNEL = False
+
+# Use this spec to use lower level Transformer Engine modules (required for fp8 training)
+def get_gpt_sparse_layer_with_transformer_engine_spec(
+    num_experts: int = None, moe_grouped_gemm: bool = False, qk_layernorm: bool = False
+) -> ModuleSpec:
+    mlp = _get_mlp_module_spec(
+        use_te=True, num_experts=num_experts, moe_grouped_gemm=moe_grouped_gemm
+    )
+    return ModuleSpec(
+        module=TransformerLayer,
+        submodules=TransformerLayerSubmodules(
+            self_attention=ModuleSpec(
+                module=SelfAttention,
+                params={"attn_mask_type": AttnMaskType.causal},
+                submodules=SelfAttentionSubmodules(
+                    linear_qkv=TELayerNormColumnParallelLinear,
+                    core_attention=DKernelLocalStrideSparseAttention,
+                    linear_proj=TERowParallelLinear,
+                    # TENorm significantly harms convergence when used
+                    # for QKLayerNorm; we instead use the Apex implementation.
+                    q_layernorm=FusedLayerNorm if qk_layernorm else IdentityOp,
+                    k_layernorm=FusedLayerNorm if qk_layernorm else IdentityOp,
+                ),
+            ),
+            self_attn_bda=get_bias_dropout_add,
+            pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+            mlp=mlp,
+            mlp_bda=get_bias_dropout_add,
+        ),
+    )
 
 # Use this spec to use lower level Transformer Engine modules (required for fp8 training)
 def get_gpt_layer_with_transformer_engine_spec(

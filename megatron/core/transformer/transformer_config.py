@@ -270,6 +270,26 @@ class TransformerConfig(ModelParallelConfig):
     moe_layer_recompute: bool = False
     """Memory optimization: checkpointing moe_layer to save actiavtion memory."""
 
+
+    ####################
+    # dkernel related
+    ####################
+
+    # TODO: descriptions auto-generated
+    sparse_block_size: int = 64
+    """The block size for sparse attention."""
+    sparse_local_blocks: int = 1
+    """The number of local blocks for sparse attention."""
+    sparse_vertical_stride: int = 1
+    """The vertical stride for sparse attention."""
+    sparse_homo_head: bool = False
+    sparse_num_dense_heads: int = 1
+    sparse_active_head_range: Optional[Tuple[int, int]] = None
+    sparse_head_sliding_offset: int = 0
+    sparse_block_m: Optional[int] = None
+    sparse_block_n: Optional[int] = None
+    sparse_max_seq_len: int = 4096
+
     ####################
     # miscellaneous
     ####################
