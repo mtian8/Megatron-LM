@@ -8,33 +8,33 @@ from customized_dkernel.utils import multiple_of, is_hip
 
 @triton.jit
 def _fwd_one_kv_block(
-    bid_n, micro_M,
-    q, q2, acc, acc2, m_i, l_i, sm_scale,
-    kt_ptrs, v_ptrs,
-    offs_m, offs_n,
-    stride_kn, stride_vn, stride_kd,
-    PAST_LEN, N_CTX,
-    dtype: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    LAST_N_BLOCK: tl.constexpr,
-    CAUSAL: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
-    NUM_DBLOCKS: tl.constexpr,
-    MERGED_Q: tl.constexpr,
-    ):
-
+        bid_n, micro_M,
+        q, q2, acc, acc2, m_i, l_i, sm_scale,
+        kt_ptrs, v_ptrs,
+        offs_m, offs_n,
+        stride_kn, stride_vn, stride_kd,
+        PAST_LEN, N_CTX,
+        dtype: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        LAST_N_BLOCK: tl.constexpr,
+        CAUSAL: tl.constexpr,
+        BLOCK_DMODEL: tl.constexpr,
+        NUM_DBLOCKS: tl.constexpr,
+        MERGED_Q: tl.constexpr,
+):
     start_n = bid_n * BLOCK_N
     if LAST_N_BLOCK:
         kt = tl.load(kt_ptrs + start_n * stride_kn, mask=offs_n[None, :] + start_n < N_CTX)
     else:
         kt = tl.load(kt_ptrs + start_n * stride_kn)
 
-    qk = tl.dot(q, kt) # TODO: (H, M, D), (D, N) -> (H, M, N)
+    qk = tl.dot(q, kt)
 
     if NUM_DBLOCKS >= 2:
         if LAST_N_BLOCK:
-            kt = tl.load(kt_ptrs + start_n * stride_kn + BLOCK_DMODEL * stride_kd, mask=offs_n[None, :] + start_n < N_CTX)
+            kt = tl.load(kt_ptrs + start_n * stride_kn + BLOCK_DMODEL * stride_kd,
+                         mask=offs_n[None, :] + start_n < N_CTX)
         else:
             kt = tl.load(kt_ptrs + start_n * stride_kn + BLOCK_DMODEL * stride_kd)
         qk += tl.dot(q2, kt)
@@ -52,16 +52,23 @@ def _fwd_one_kv_block(
     # l(x) = exp(m(x^(1))-m(x)) * l(x^(1)) + exp(m(x^(2))-m(x)) * l(x^(2))
     # softmax(x) = f(x) / l(x)
     # acc(x) = softmax(x) * v(x)
-    m_ij = tl.maximum(m_i, tl.max(qk, 1))  # m_i = m([x^(0), ..., x^(b-1)]), m_ij = m(x) (x=[x^(0), ..., x^(b)]) in flash-attn2
-    p = tl.math.exp2(qk - m_ij[:, None])  # unnormalized, f(x^(b))=exp(x^(b) - m(x^(b))), p = exp(x^(b) - m(x)) = f(x^(b)) * exp(m(x)^(b) - m(x)) = the second column of f(x) in paper
-    l_ij = tl.sum(p, 1)  # second term of l(x) in paper
-    log_alpha = m_i - m_ij
-    alpha = tl.math.exp2(log_alpha)  # alpha = exp(m([x^(0), ..., x^(b-1)]) - m(x)), which is the coefficient of the first term of f(x) or l(x) in paper
 
-    acc = acc * alpha[:, None]  # acc = softmax * v, so first term of acc = acc(x^(0), ..., x^(b-1)) * alpha
+    # m_i = m([x^(1), x^(2)]), m_ij = m(x) (x=[x^(1), x^(2)]) in flash-attn2
+    m_ij = tl.maximum(m_i, tl.max(qk, 1))
+    # probs before normalization:
+    # -  f(x^(2)) = exp(x^(2) - m(x^(2))),
+    # -  p = exp(x^(2) - m(x)) = f(x^(2)) * exp(m(x)^(2) - m(x)) = the second column of f(x) in paper
+    p = tl.math.exp2(qk - m_ij[:, None])
+    l_ij = tl.sum(p, 1)  # second term of l(x) in paper
+    # alpha = exp(m(x^(1)) - m(x)), which is the coefficient of the first term of f(x) or l(x) in paper
+    log_alpha = m_i - m_ij
+    alpha = tl.math.exp2(log_alpha)
+    # acc = softmax * v, so first term of acc = acc(x^(1)) * alpha
+    acc = acc * alpha[:, None]
     # update m_i
     m_i = m_ij
-    l_i = l_i * alpha + l_ij  # the normalizer of p above. Add the second term l_ij to the first term l_i * alpha
+    # the normalizer of p above. Add the second term l_ij to the first term l_i * alpha
+    l_i = l_i * alpha + l_ij
 
     p = p.to(dtype)
     if LAST_N_BLOCK:
@@ -83,16 +90,16 @@ def _fwd_one_kv_block(
 
 fwd_configs = [
     triton.Config({}, num_stages=s, num_warps=w) \
-    for s in ([1] if is_hip() else [1, 2, 3, 4, 5, 7])\
+    for s in ([1] if is_hip() else [1, 2, 3, 4, 5, 7]) \
     for w in [4, 8] \
-]
+    ]
 
 
 @triton.autotune(
-        fwd_configs,
-        key=["N_CTX_FOR_AUTOTUNE", "BLOCK_DMODEL", "NUM_DBLOCKS",
-            "BLOCK_M", "BLOCK_N", "Q_ROUNDED_LEN"]
-            )
+    fwd_configs,
+    key=["N_CTX_FOR_AUTOTUNE", "BLOCK_DMODEL", "NUM_DBLOCKS",
+         "BLOCK_M", "BLOCK_N", "Q_ROUNDED_LEN"]
+)
 @triton.jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
@@ -119,12 +126,11 @@ def _fwd_kernel(
     NUM_DBLOCKS: tl.constexpr,
     MERGED_Q: tl.constexpr,
     NUM_DIAG_BLOCKS: tl.constexpr,
-    p_block,
+    probs,
     stride_pz, stride_ph, stride_pm, stride_pn,
     K_ROUNDED_LEN,
-    alpha_info,
-        stride_am,
-        stride_an,
+    log_alpha_cache,
+    stride_az, stride_ah, stride_am, stride_an,
 ):
     # z => batch, h => head, m => seq_len(q), n => seq_len(k,v), d => head_dim
     Q_LEN = N_CTX - PAST_LEN
@@ -133,25 +139,25 @@ def _fwd_kernel(
     off_h = off_hz % H
     off_z = off_hz // H
 
-
-
     Q += off_z * stride_qz + off_h * stride_qh
     K += off_z * stride_kz + off_h * stride_kh
     V += off_z * stride_vz + off_h * stride_vh
 
-    # initialize offsets
+    probs += off_z * stride_pz + off_h * stride_ph
+    log_alpha_cache += off_z * stride_az + off_h * stride_ah
 
+    # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)  # target rows in Q
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qd
-    # off_k = offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kd
     off_k = offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kd
     off_v = offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vd
+
     # Initialize pointers to Q, K, V
-    q_ptrs  = Q + off_q
+    q_ptrs = Q + off_q
     kt_ptrs = K + off_k  # ptrs to K at this row block; columns pointed to [0, BLOCK_N), and will be updated in the loop
-    v_ptrs  = V + off_v
+    v_ptrs = V + off_v
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
@@ -165,22 +171,6 @@ def _fwd_kernel(
         1.44269504  # 1/log2 as we use base2 for exponential and logarithm
     )
 
-    ## handle chunked prefix filling
-    # if INFERENCE:
-    #     if tl.program_id(0) == 0:
-    #         past_left = PAST_LEN % BLOCK_M
-    #         q_offs_m =  (tl.arange(0, BLOCK_M) - past_left)
-    #         start_m = PAST_LEN // BLOCK_M
-    #     else:
-    #         start_m = PAST_LEN // BLOCK_M + tl.program_id(0)
-    #         first_q_tokens = BLOCK_M - (PAST_LEN) % BLOCK_M
-    #         q_offs_m = first_q_tokens + tl.arange(0, BLOCK_M)
-    #     q_ptrs = Q + q_offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qd
-    #     q = tl.load(q_ptrs, mask=(q_offs_m >= 0) & (q_offs_m < Q_LEN))
-    #     if NUM_DBLOCKS >= 2:
-    #         q2 = tl.load(q_ptrs + BLOCK_DMODEL + stride_qd,
-    #                      mask=(q_offs_m >= 0) & (q_offs_m < Q_LEN))
-
     # load q: it will stay in SRAM throughout
     q2 = 0
     if EVEN_M_BLOCK:
@@ -193,117 +183,106 @@ def _fwd_kernel(
             q2 = tl.load(q_ptrs + BLOCK_DMODEL * stride_qd, mask=offs_m[:, None] < Q_LEN)
 
     layout_ptr = layout_crow_ptr + off_h * layout_crow_stride_h + start_m * layout_crow_stride_m
-    # start_l = tl.load(layout_ptr).to(tl.int32)
-    # end_l = tl.load(layout_ptr + layout_crow_stride_m).to(tl.int32)
 
-    # the positions of the head elements of rows start_m and start_m+1 in layout_col, where the mask is 1
+    # We use start_m to extract from layout_crow_ptr the current row block. 
+    # layout_crow[start_m] stores the starting pointer of layout_col at row start_m. 
     start_l, end_l = tl.load(layout_ptr + tl.arange(0, 2) * layout_crow_stride_m).split()
-    # col_idx_idx in [start_l, end_l) means positions of elements of row start_m in layout_col where the mask is 1.
+    # [start_l, end_l) is the range that we should look into from layout_col. Each position stores a column block.
+    # Thus end_l - start_l <= number of column blocks.
+    # layout_col[col_idx_idx] (start_l <= col_idx_idx < end_l) is the col_idx_idx-th non-empty column block.  
 
     # loop over k, v and update accumulator
     non_diag_end = tl.maximum(end_l - NUM_DIAG_BLOCKS, start_l)
     cumulative_alpha = tl.zeros([BLOCK_M, 1], dtype=tl.float64)
-    # print('** non-diag', non_diag_end - start_l)
     for col_idx_idx in range(start_l, non_diag_end):
-        # tl.device_print('# col_idx_idx:', col_idx_idx)
         # bid_n: block id for n
         # micro_M: number of rows in Q that are attended to by this block
         if MERGED_Q:
-            bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
-            micro_M = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m + 1).to(tl.int32)
+            bid_n = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(
+                tl.int32)
+            micro_M = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m + 1).to(
+                tl.int32)
         else:
-            bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
+            bid_n = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(
+                tl.int32)
             micro_M = 0
         acc, acc2, m_i, l_i, p, log_alpha = \
             _fwd_one_kv_block(bid_n, micro_M,
-                q, q2, acc, acc2, m_i, l_i, sm_scale,
-                kt_ptrs, v_ptrs,
-                offs_m, offs_n,
-                stride_kn, stride_vn, stride_kd,
-                PAST_LEN, N_CTX,
-                dtype=Q.dtype.element_ty,
-                BLOCK_M=BLOCK_M,
-                BLOCK_N=BLOCK_N,
-                LAST_N_BLOCK=False,
-                CAUSAL=True,
-                BLOCK_DMODEL=BLOCK_DMODEL,
-                NUM_DBLOCKS=NUM_DBLOCKS,
-                MERGED_Q=MERGED_Q
-                )
+                              q, q2, acc, acc2, m_i, l_i, sm_scale,
+                              kt_ptrs, v_ptrs,
+                              offs_m, offs_n,
+                              stride_kn, stride_vn, stride_kd,
+                              PAST_LEN, N_CTX,
+                              dtype=Q.dtype.element_ty,
+                              BLOCK_M=BLOCK_M,
+                              BLOCK_N=BLOCK_N,
+                              LAST_N_BLOCK=False,
+                              CAUSAL=True,
+                              BLOCK_DMODEL=BLOCK_DMODEL,
+                              NUM_DBLOCKS=NUM_DBLOCKS,
+                              MERGED_Q=MERGED_Q
+                              )
 
         # softmax(x) = f(x) / l(x)
         # softmax((x^(0), x^(1))) = [f(x^(0)) / l(x), f(x^(1)) / l(x)]
         #                       = [f(x^(0)) / l(x^(0)) * l(x^(0)) / l(x), f(x^(1)) / l(x)]
 
-        if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # last Q block, record p
-            off_ps = (off_z * stride_pz + off_h * stride_ph +
-                      tl.arange(0, BLOCK_M)[:, None] * stride_pm +
+        if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # record p only for the last row block
+            off_ps = (tl.arange(0, BLOCK_M)[:, None] * stride_pm +
                       (bid_n * BLOCK_N + offs_n[None, :]) * stride_pn)
-            tl.store(p_block + off_ps, p)
-            off_alpha = tl.arange(0, BLOCK_M)[:, None] * stride_am + (col_idx_idx - start_l) * stride_an
-            tl.store(alpha_info + off_alpha, log_alpha[:, None])
+            tl.store(probs + off_ps, p)
+            off_alpha = (tl.arange(0, BLOCK_M)[:, None] * stride_am +
+                         (col_idx_idx - start_l) * stride_an)
+            tl.store(log_alpha_cache + off_alpha, log_alpha[:, None])
 
-
-
-    # diag
-    # print('>> diag', end_l - non_diag_end)
+    # diag (usually the last col block)
     for col_idx_idx in range(non_diag_end, end_l):
-        # tl.device_print('> col_idx_idx:', col_idx_idx)
         if MERGED_Q:
-            bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
-            micro_M = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m + 1).to(tl.int32)
+            bid_n = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(
+                tl.int32)
+            micro_M = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m + 1).to(
+                tl.int32)
         else:
-            bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
+            bid_n = tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(
+                tl.int32)
             micro_M = 0
         acc, acc2, m_i, l_i, p, log_alpha = \
             _fwd_one_kv_block(bid_n, micro_M,
-                q, q2, acc, acc2, m_i, l_i, sm_scale,
-                kt_ptrs, v_ptrs,
-                offs_m, offs_n,
-                stride_kn, stride_vn, stride_kd,
-                PAST_LEN, N_CTX,
-                dtype=Q.dtype.element_ty,
-                BLOCK_M=BLOCK_M,
-                BLOCK_N=BLOCK_N,
-                LAST_N_BLOCK=True,
-                CAUSAL=True,
-                BLOCK_DMODEL=BLOCK_DMODEL,
-                NUM_DBLOCKS=NUM_DBLOCKS,
-                MERGED_Q=MERGED_Q
-                )
-        # if p.shape[1] != BLOCK_N:
-        #     print('>>>> p:', p.shape[0], p.shape[1])
-        if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # last Q block, record p
-            off_ps = (off_z * stride_pz + off_h * stride_ph +
-                      tl.arange(0, BLOCK_M)[:, None] * stride_pm +
+                              q, q2, acc, acc2, m_i, l_i, sm_scale,
+                              kt_ptrs, v_ptrs,
+                              offs_m, offs_n,
+                              stride_kn, stride_vn, stride_kd,
+                              PAST_LEN, N_CTX,
+                              dtype=Q.dtype.element_ty,
+                              BLOCK_M=BLOCK_M,
+                              BLOCK_N=BLOCK_N,
+                              LAST_N_BLOCK=True,
+                              CAUSAL=True,
+                              BLOCK_DMODEL=BLOCK_DMODEL,
+                              NUM_DBLOCKS=NUM_DBLOCKS,
+                              MERGED_Q=MERGED_Q
+                              )
+        if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # record p only for the last row block
+            off_ps = (tl.arange(0, BLOCK_M)[:, None] * stride_pm +
                       (bid_n * BLOCK_N + offs_n[None, :]) * stride_pn)
-            tl.store(p_block + off_ps, p)
+            tl.store(probs + off_ps, p)
             off_alpha = tl.arange(0, BLOCK_M)[:, None] * stride_am + (col_idx_idx - start_l) * stride_an
-            tl.store(alpha_info + off_alpha, log_alpha[:, None])
+            tl.store(log_alpha_cache + off_alpha, log_alpha[:, None])
 
-    if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # last Q block, record p
-        # update p_block with alpha
+    if (start_m + 1) * BLOCK_M == Q_ROUNDED_LEN:  # record p only for the last row block
+        # globalize probs with alpha
         for col_idx_idx in range(end_l - 1, start_l - 1, -1):
-            if MERGED_Q:
-                bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
-                micro_M = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m + 1).to(tl.int32)
-            else:
-                bid_n = tl.load(layout_col_ptr +  off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m).to(tl.int32)
-                micro_M = 0
+            bid_n = (tl.load(layout_col_ptr + off_h * layout_col_stride_h + col_idx_idx * layout_col_stride_m)
+                     .to(tl.int32))
             off_alpha = tl.arange(0, BLOCK_M)[:, None] * stride_am + (col_idx_idx - start_l) * stride_an
-            log_alpha = tl.load(alpha_info + off_alpha)
+            log_alpha = tl.load(log_alpha_cache + off_alpha)
 
-            off_ps = (off_z * stride_pz + off_h * stride_ph +
-                      tl.arange(0, BLOCK_M)[:, None] * stride_pm +
+            off_ps = (tl.arange(0, BLOCK_M)[:, None] * stride_pm +
                       (bid_n * BLOCK_N + offs_n[None, :]) * stride_pn)
-            p = tl.load(p_block + off_ps)
-            p = p / l_i[:, None]
-            tl.store(p_block + off_ps, p * tl.math.exp2(cumulative_alpha))
+            p = tl.load(probs + off_ps)
+            p = p / l_i[:, None]  # normalize
+            tl.store(probs + off_ps, p * tl.math.exp2(cumulative_alpha))  # globalize
             cumulative_alpha += log_alpha
-
-
-    # print("---------------------")
-    # while True: pass
 
     # flash-attn 2
     m_i += tl.math.log2(l_i)
@@ -320,23 +299,23 @@ def _fwd_kernel(
         tl.store(m_ptrs, m_i)
     off_o = off_z * stride_oz + off_h * stride_oh + offs_m[:, None] * stride_om + offs_d[None, :] * stride_od
     out_ptrs = Out + off_o
-    tl.store(out_ptrs, acc,  mask=offs_m[:, None] < Q_LEN)
+    tl.store(out_ptrs, acc, mask=offs_m[:, None] < Q_LEN)
     if NUM_DBLOCKS >= 2:
-        tl.store(out_ptrs + BLOCK_DMODEL * stride_od, acc2,  mask=offs_m[:, None] < Q_LEN)
+        tl.store(out_ptrs + BLOCK_DMODEL * stride_od, acc2, mask=offs_m[:, None] < Q_LEN)
 
 
 def _forward(ctx,
-            q: Tensor,
-            k: Tensor,
-            v: Tensor,
-            sm_scale: int,
-            layout_csr: Tuple[Tensor, Tensor, int, int],
-            seq_dim: int=1,
-            inference: Optional[bool]=None,
-            out:Optional[Tensor]=None,
-            d_splits: Optional[int]=None,
-            max_seqlen: Optional[int]=None,
-            ) -> (Tensor, Tensor):
+             q: Tensor,
+             k: Tensor,
+             v: Tensor,
+             sm_scale: int,
+             layout_csr: Tuple[Tensor, Tensor, int, int],
+             seq_dim: int = 1,
+             inference: Optional[bool] = None,
+             out: Optional[Tensor] = None,
+             d_splits: Optional[int] = None,
+             max_seqlen: Optional[int] = None,
+             ) -> (Tensor, Tensor):
     """
     :param q, k, v: shape=(batch, n_heads, seq_len, head_size) if seq_len=2 else (batch, seq_len, n_heads, head_size).
         Length of q is allowed to be different than k/v for decoding.
@@ -350,6 +329,7 @@ def _forward(ctx,
     :param out: if provided, output will be saved to.
     :param d_splits: None, 1 or 2.  None=1 if head_dim=64 else 2.
     :param max_seqlen: used for checking input seqlen
+    :returns: (output, attention_prob)
     """
     assert seq_dim in [2, 1]
     hdim = 3 - seq_dim
@@ -374,12 +354,10 @@ def _forward(ctx,
         # assert klen > qlen
         assert qlen == 1, \
             ("If q has differnt seq length that k and v, q should only have 1 token per batch for decoding,"
-            f"but got q length = {qlen}.")
+             f"but got q length = {qlen}.")
         layout_crow_indices = layout_crow_indices[..., (klen - qlen) // block_m:]
 
-    # TODO: do I need to set o.requires_grad to True explicitely?
     o = out if out is not None else q.new_empty(q.shape).contiguous()
-
 
     merged_q = False
     if layout_col_indices.dim() == 3:
@@ -390,10 +368,10 @@ def _forward(ctx,
     kwargs = {
         "MERGED_Q": merged_q,
         "NUM_DIAG_BLOCKS": max(1, block_m // block_n),
-        }
+    }
 
     if inference is None:
-        inference = (not q.requires_grad) and (not k.requires_grad)  and (not v.requires_grad)
+        inference = (not q.requires_grad) and (not k.requires_grad) and (not v.requires_grad)
 
     if inference and qlen < block_m:
         # change block_m:
@@ -401,10 +379,9 @@ def _forward(ctx,
         # Need to multiply layout_crow_indices, how to handle micro_M?
         block_m = max(triton.next_power_of_2(qlen), 16)
 
-    grid = (triton.cdiv(q.shape[seq_dim], block_m), q.shape[0] * q.shape[hdim])
+    grid = (triton.cdiv(q.shape[seq_dim], block_m), q.shape[0] * q.shape[hdim])  # [row_blocks, b*h]
     q_rounded_len = grid[0] * block_m
     kv_rounded_len = triton.cdiv(klen, block_n) * block_n
-
 
     if inference:
         L = m = q.new_empty((1,))
@@ -413,38 +390,44 @@ def _forward(ctx,
         m = torch.zeros((q.shape[0] * q.shape[hdim], q_rounded_len), device=q.device, dtype=torch.float32)
 
     if layout_crow_indices.dim() == 1:
-        layout_crow_indices = layout_crow_indices[None].expand(q.shape[hdim] , -1)
+        layout_crow_indices = layout_crow_indices[None].expand(q.shape[hdim], -1)
         layout_col_indices = layout_col_indices[None].expand((q.shape[hdim],) + layout_col_indices.shape)
 
-    # print("layout_crow_indices.shape, layout_col_indices.shape", layout_crow_indices.shape, layout_col_indices.shape)
-    # print("Strides", layout_crow_indices.stride(0), layout_crow_indices.stride(1), layout_col_indices.stride(0), layout_col_indices.stride(1))
-    # print("Grid", grid)
-    # print("layout values", layout_crow_indices[0, grid[0] - 10: grid[0]], layout_crow_indices[0, grid[0]: grid[0] + 10])
-
     if d_splits is None:
-        block_d = max(64, q.shape[-1] // 2) # allow larger num_stages to split along D
+        block_d = max(64, q.shape[-1] // 2)  # allow larger num_stages to split along D
         d_splits = q.shape[-1] // block_d
     else:
         assert d_splits in [1, 2]
         block_d = q.shape[-1] // d_splits
-    # print("In Forward: hdim, block_d, d_splits", hdim, block_d, d_splits)
-    # print("Q.shape, K.shape, V.shape", q.shape, k.shape, v.shape)
-    p_block = torch.zeros((q.shape[0], q.shape[hdim], block_m, kv_rounded_len), device=q.device, dtype=torch.float64)
-    # print("p_block", p_block.shape, p_block.stride())
-    kwargs["p_block"] = p_block
-    stride_pz = p_block.stride(0)
-    stride_ph = p_block.stride(1)
-    stride_pm = p_block.stride(2)
-    stride_pn = p_block.stride(3)
 
+    # prepare info related to probability score 
+    # allocate space for probability block and alpha
+    # probs: [b, h, block_m, s_k] stores the last row block of probabilities 
+    probs = torch.zeros((q.shape[0], q.shape[hdim], block_m, kv_rounded_len),
+                        device=q.device, dtype=torch.float64)
+    # log_alpha_cache: [b, h, block_m, col_blocks] stores the `log(alpha)` coefficient for each column block
+    log_alpha_cache = torch.zeros((q.shape[0], q.shape[hdim], block_m, kv_rounded_len // block_n),
+                                  device=q.device, dtype=torch.float64)
+
+    stride_pz = probs.stride(0)
+    stride_ph = probs.stride(1)
+    stride_pm = probs.stride(2)
+    stride_pn = probs.stride(3)
+    stride_az = log_alpha_cache.stride(0)
+    stride_ah = log_alpha_cache.stride(1)
+    stride_am = log_alpha_cache.stride(2)
+    stride_an = log_alpha_cache.stride(3)
+    kwargs["probs"] = probs
     kwargs["stride_pz"] = stride_pz
     kwargs["stride_ph"] = stride_ph
     kwargs["stride_pm"] = stride_pm
     kwargs["stride_pn"] = stride_pn
     kwargs["K_ROUNDED_LEN"] = kv_rounded_len
-    kwargs["alpha_info"] = torch.zeros((block_m, kv_rounded_len), device=q.device, dtype=torch.float64)
-    kwargs["stride_am"] = kwargs["alpha_info"].stride(0)
-    kwargs["stride_an"] = kwargs["alpha_info"].stride(1)
+    kwargs["log_alpha_cache"] = log_alpha_cache
+    kwargs["stride_az"] = stride_az
+    kwargs["stride_ah"] = stride_ah
+    kwargs["stride_am"] = stride_am
+    kwargs["stride_an"] = stride_an
     _fwd_kernel[grid](
         q, k, v, sm_scale,
         layout_crow_indices,
@@ -458,14 +441,14 @@ def _forward(ctx,
         v.stride(0), v.stride(hdim), v.stride(seq_dim), v.stride(3),
         o.stride(0), o.stride(hdim), o.stride(seq_dim), o.stride(3),
         q.shape[0], q.shape[hdim], k.shape[seq_dim],
-        k.shape[seq_dim] - q.shape[seq_dim], # PAST_LEN
+        k.shape[seq_dim] - q.shape[seq_dim],  # PAST_LEN
         q_rounded_len,
-        multiple_of(qlen, 1024), # N_CTX_FOR_AUTOTUNE, TODO: inference??
+        multiple_of(qlen, 1024),  # N_CTX_FOR_AUTOTUNE
         BLOCK_M=block_m,
         BLOCK_N=block_n,
         BLOCK_DMODEL=block_d,
         EVEN_M_BLOCK=qlen % block_m == 0,
-        EVEN_N_BLOCK=klen % block_n == 0 ,
+        EVEN_N_BLOCK=klen % block_n == 0,
         INFERENCE=inference,
         NUM_DBLOCKS=d_splits,
         **kwargs
@@ -482,7 +465,7 @@ def _forward(ctx,
     ctx.hdim = hdim
     ctx.kwargs = kwargs
 
-    return o, p_block
+    return o, probs
 
 
 __all__ = ["_forward"]

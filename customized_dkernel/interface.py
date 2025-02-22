@@ -167,6 +167,8 @@ class SparseAttention(torch.nn.Module):
         :param seqlens: real seqlen, can be optionally used when has right padding.
             No need to specify if left_paddings is used.
             Can only be used at inference.
+        :param return_attn: return attention score. If true, return the last block_m rows of the score matrix.
+            Note that it may contain empty rows and/or columns due to wrapping.
         """
 
         # check heads
@@ -288,4 +290,4 @@ class LocalStrideSparseAttention(SparseAttention):
 __all__ = [
     "SparseAttention",
     "LocalStrideSparseAttention",
-    ]
+]
