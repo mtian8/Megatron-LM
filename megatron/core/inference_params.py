@@ -9,6 +9,7 @@ class InferenceParams:
         self.sequence_len_offset = 0
         self.batch_size_offset = 0
         self.key_value_memory_dict = {}
+        self.other_kwargs = {}
 
     def swap_key_value_dict(self, batch_idx):
         "swap between batches"

@@ -42,6 +42,7 @@ else:
 
 from megatron.core.utils import debug, use_debug, change_debug
 
+
 @dataclass
 class SelfAttentionSubmodules:
     linear_qkv: Union[ModuleSpec, type] = None
@@ -67,12 +68,12 @@ class Attention(MegatronModule, ABC):
     """
 
     def __init__(
-        self,
-        config: TransformerConfig,
-        submodules: Union[SelfAttentionSubmodules, CrossAttentionSubmodules],
-        layer_number: int,
-        attn_mask_type: AttnMaskType,
-        attention_type: str,
+            self,
+            config: TransformerConfig,
+            submodules: Union[SelfAttentionSubmodules, CrossAttentionSubmodules],
+            layer_number: int,
+            attn_mask_type: AttnMaskType,
+            attention_type: str,
     ):
         super().__init__(config=config)
 
@@ -119,14 +120,15 @@ class Attention(MegatronModule, ABC):
         )
 
     def _checkpointed_attention_forward(
-        self,
-        query,
-        key,
-        value,
-        attention_mask,
-        rotary_pos_emb=None,
-        attn_mask_type=None,
-        packed_seq_params=None,
+            self,
+            query,
+            key,
+            value,
+            attention_mask,
+            rotary_pos_emb=None,
+            attn_mask_type=None,
+            packed_seq_params=None,
+            extra_kwargs=None
     ):
         """Forward method with selective activation checkpointing."""
 
@@ -144,6 +146,7 @@ class Attention(MegatronModule, ABC):
                 attention_mask,
                 attn_mask_type=attn_mask_type,
                 packed_seq_params=packed_seq_params,
+                extra_kwargs=extra_kwargs
             )
             return output_
 
@@ -231,6 +234,10 @@ class Attention(MegatronModule, ABC):
         if rotary_pos_emb is None:
             return key, value, rotary_pos_emb, attn_mask_type
 
+        # ######### TEST ####### #
+        # ORACLE POSITIONAL EMBEDDING
+        rotary_pos_emb = self._modify_rotary_pos_emb_from_oracle_pattern(key, value, rotary_pos_emb, inference_params)
+
         q_pos_emb, k_pos_emb = rotary_pos_emb
         q_pos_emb = q_pos_emb[sequence_start:sequence_end, :, :, :]
         k_pos_emb = k_pos_emb[:sequence_end, :, :, :]
@@ -245,14 +252,106 @@ class Attention(MegatronModule, ABC):
         is "self-attn" or "cross-attn".
         """
 
+    def _modify_rotary_pos_emb_from_oracle_pattern(self, key, value, rotary_pos_emb, inference_params):
+        """Modifies the rotary positional embedding based on the oracle pattern.
+
+        Args:
+            rotary_pos_emb (tuple): The rotary positional embedding.
+            inference_params (InferenceParams): The inference parameters.
+
+        Returns:
+            tuple: The modified rotary positional embedding.
+        """
+        if inference_params is None:
+            return rotary_pos_emb
+
+        if not hasattr(inference_params, "other_kwargs"):
+            return rotary_pos_emb
+
+
+
+        # oracle mode: pattern_id given
+        # if not inference_params.other_kwargs.get("pattern_id", None):
+        #     return rotary_pos_emb
+        # pattern_id = inference_params.other_kwargs["pattern_id"]
+        # if not hasattr(self.core_attention, "get_attention_mask"):
+        #     return rotary_pos_emb
+        # if self.layer_number <= 3:
+        #     return rotary_pos_emb
+        # first_block_start, first_block_end, second_block_start, second_block_end, sliding_window_size, block_size = \
+        #     self.core_attention.get_attention_mask(pattern_id)
+        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
+        #     print(f"[rank {torch.distributed.get_rank()}] pattern_id for ROPE modification: {pattern_id} => pattern {self.core_attention.choose_attention_pattern_id({'pattern_id': pattern_id})}")
+
+
+        # real-world: infer from extracted_pattern_id
+        if not inference_params.other_kwargs.get("extracted_pattern_id", None):
+            return rotary_pos_emb
+        if len(inference_params.other_kwargs["extracted_pattern_id"]) != 1:
+            return rotary_pos_emb
+        extracted_pattern_id = inference_params.other_kwargs["extracted_pattern_id"][0]
+        if not hasattr(self.core_attention, "get_attention_mask_by_id"):
+            return rotary_pos_emb
+        first_block_start, first_block_end, second_block_start, second_block_end, sliding_window_size, block_size = \
+            self.core_attention.get_attention_mask_by_id(extracted_pattern_id)
+        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
+            pattern_id = inference_params.other_kwargs.get("pattern_id", None)
+            if pattern_id is not None:
+                print(f"[rank {torch.distributed.get_rank()}] ROPE modification: pos {pattern_id} "
+                      f" => id {self.core_attention.choose_attention_pattern_id({'pattern_id': pattern_id})}; EXTRACTED={extracted_pattern_id}")
+
+        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
+        #     print(f"[rank {torch.distributed.get_rank()}] first_block_start: {first_block_start}, first_block_end: {first_block_end}, second_block_start: {second_block_start}, second_block_end: {second_block_end}, sliding_window_size: {sliding_window_size}, block_size: {block_size}")
+        if first_block_start == -1:  # full attention
+            return rotary_pos_emb
+        if sliding_window_size == -1:  # no sliding window
+            return rotary_pos_emb
+
+        q_pos_emb, k_pos_emb = rotary_pos_emb
+
+        sequence_start = inference_params.sequence_len_offset
+        sequence_end = key.size(0)
+        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
+        #     print(
+        #         f"[rank {torch.distributed.get_rank()}] sequence_start {sequence_start}, sequence_end {sequence_end}")
+
+        maximum_sequence_end = q_pos_emb.size(0)
+        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
+        #     print(f"[rank {torch.distributed.get_rank()}] q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}, key: {key.shape}, value: {value.shape}")
+        if second_block_start == -1:  # use sliding window start as second block start
+            second_block_start = (sequence_end - sliding_window_size) // block_size * block_size
+            second_block_end = sequence_end
+        else:
+            second_block_end = min(second_block_end, sequence_end)
+        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
+        #     print(f"[rank {torch.distributed.get_rank()}] second_block_start: {second_block_start}, first_block_end: {first_block_end}, second_block_end: {second_block_end}")
+        if second_block_start <= first_block_end:
+            return rotary_pos_emb
+
+        second_block_len = second_block_end - second_block_start
+        modification_len = maximum_sequence_end - second_block_start
+
+
+        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
+            print(f"[rank {torch.distributed.get_rank()}] Moving embeddings of len {modification_len} from {first_block_end} to {second_block_start}")
+            print(f"[rank {torch.distributed.get_rank()}] Before: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}")
+        # copy
+        q_pos_emb = torch.cat([q_pos_emb[:second_block_start], q_pos_emb[first_block_end: first_block_end + modification_len]], dim=0)
+        k_pos_emb = torch.cat([k_pos_emb[:second_block_start], k_pos_emb[first_block_end: first_block_end + modification_len]], dim=0)
+        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
+            print(
+                f"[rank {torch.distributed.get_rank()}] After: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}")
+        return q_pos_emb, k_pos_emb
+
+
     def forward(
-        self,
-        hidden_states,
-        attention_mask,
-        key_value_states=None,
-        inference_params=None,
-        rotary_pos_emb=None,
-        packed_seq_params=None,
+            self,
+            hidden_states,
+            attention_mask,
+            key_value_states=None,
+            inference_params=None,
+            rotary_pos_emb=None,
+            packed_seq_params=None,
     ):
         # hidden_states: [sq, b, h]
 
@@ -266,6 +365,20 @@ class Attention(MegatronModule, ABC):
         # Get the query, key and value tensors based on the type of attention -
         # self or cross attn.
         query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
+
+        extra_kwargs = {}
+        extra_kwargs["prefill"] = inference_params.sequence_len_offset == 0
+        if extra_kwargs["prefill"]:
+            if self.layer_number == 1:
+                inference_params.other_kwargs["tokens_generated"] = 0
+                inference_params.other_kwargs["getting_pattern"] = True
+                inference_params.other_kwargs["extracted_pattern_id"] = []
+        else:
+            if self.layer_number == 1:
+                inference_params.other_kwargs["tokens_generated"] += key.size(0)
+        extra_kwargs["tokens_generated"] = inference_params.other_kwargs["tokens_generated"]
+        extra_kwargs["getting_pattern"] = inference_params.other_kwargs["getting_pattern"]
+        extra_kwargs["extracted_pattern_id"] = inference_params.other_kwargs["extracted_pattern_id"]
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
@@ -284,6 +397,9 @@ class Attention(MegatronModule, ABC):
         # ================================================
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
+
+
+
 
             if packed_seq_params is not None:
                 cu_seqlens_q = packed_seq_params.cu_seqlens_q
@@ -315,6 +431,11 @@ class Attention(MegatronModule, ABC):
         # core attention computation
         # ==================================
 
+        if hasattr(inference_params, "other_kwargs") and inference_params.other_kwargs.get("pattern_id", None):
+            extra_kwargs["pattern_id"] = inference_params.other_kwargs["pattern_id"]
+
+
+
         if self.checkpoint_core_attention and self.training:
             core_attn_out = self._checkpointed_attention_forward(
                 query,
@@ -323,6 +444,7 @@ class Attention(MegatronModule, ABC):
                 attention_mask,
                 attn_mask_type=attn_mask_type,
                 packed_seq_params=packed_seq_params,
+                extra_kwargs=extra_kwargs,
             )
         else:
             core_attn_out = self.core_attention(
@@ -332,6 +454,7 @@ class Attention(MegatronModule, ABC):
                 attention_mask,
                 attn_mask_type=attn_mask_type,
                 packed_seq_params=packed_seq_params,
+                extra_kwargs=extra_kwargs,
             )
 
         if packed_seq_params is not None:
@@ -358,11 +481,11 @@ class SelfAttention(Attention):
     """
 
     def __init__(
-        self,
-        config: TransformerConfig,
-        submodules: SelfAttentionSubmodules,
-        layer_number: int,
-        attn_mask_type=AttnMaskType.padding,
+            self,
+            config: TransformerConfig,
+            submodules: SelfAttentionSubmodules,
+            layer_number: int,
+            attn_mask_type=AttnMaskType.padding,
     ):
         super().__init__(
             config=config,
@@ -486,17 +609,17 @@ class SelfAttention(Attention):
         new_tensor_shape = mixed_qkv.size()[:-1] + (
             self.num_query_groups_per_partition,
             (
-                (self.num_attention_heads_per_partition // self.num_query_groups_per_partition + 2)
-                * self.hidden_size_per_attention_head
+                    (self.num_attention_heads_per_partition // self.num_query_groups_per_partition + 2)
+                    * self.hidden_size_per_attention_head
             ),
         )
         mixed_qkv = mixed_qkv.view(*new_tensor_shape)
         debug("Mixed QKV reshaped: ", mixed_qkv.shape)
         split_arg_list = [
             (
-                self.num_attention_heads_per_partition
-                // self.num_query_groups_per_partition
-                * self.hidden_size_per_attention_head
+                    self.num_attention_heads_per_partition
+                    // self.num_query_groups_per_partition
+                    * self.hidden_size_per_attention_head
             ),
             self.hidden_size_per_attention_head,
             self.hidden_size_per_attention_head,
@@ -544,11 +667,11 @@ class CrossAttention(Attention):
     """
 
     def __init__(
-        self,
-        config: TransformerConfig,
-        submodules: CrossAttentionSubmodules,
-        layer_number: int,
-        attn_mask_type=AttnMaskType.padding,
+            self,
+            config: TransformerConfig,
+            submodules: CrossAttentionSubmodules,
+            layer_number: int,
+            attn_mask_type=AttnMaskType.padding,
     ):
         super().__init__(
             config=config,

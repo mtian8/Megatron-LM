@@ -47,6 +47,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
     args = get_args()
     use_te = args.transformer_impl == "transformer_engine"
     use_dkernel = args.transformer_impl == "dkernel"
+    use_dkernel_dynamic = args.transformer_impl == "dkernel_dynamic"
 
     print_rank_0('building Llama model ...')
 
@@ -72,6 +73,8 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
                 transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(args.num_experts, args.moe_grouped_gemm, args.qk_layernorm)
             elif use_dkernel:
                 transformer_layer_spec = get_gpt_sparse_layer_with_transformer_engine_spec(args.num_experts, args.moe_grouped_gemm, args.qk_layernorm)
+            elif use_dkernel_dynamic:
+                transformer_layer_spec = get_gpt_sparse_layer_with_transformer_engine_spec(args.num_experts, args.moe_grouped_gemm, args.qk_layernorm, dynamic=True)
             else:
                 transformer_layer_spec = get_gpt_layer_local_spec(args.num_experts, args.moe_grouped_gemm, args.qk_layernorm)
 
@@ -129,6 +132,7 @@ if __name__ == "__main__":
     while True:
         choice = torch.tensor(1, dtype=torch.long, device='cuda')
         torch.distributed.broadcast(choice, 0)
+        # print(f"[{torch.distributed.get_rank()}] Choice: {choice.item()}")
         if choice.item() == 0:
             try:
                 generate_and_post_process(model)

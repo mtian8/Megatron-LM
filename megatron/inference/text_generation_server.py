@@ -189,6 +189,13 @@ class MegatronGenerate(Resource):
             ignore_special_tokens = request_json["ignore_special_tokens"]
             if not isinstance(ignore_special_tokens, bool):
                 return "ignore_special_tokens must be a boolean value"
+
+        attend_positions = None
+        if "attend_positions" in request_json:
+            attend_positions = request_json["attend_positions"]
+            if not isinstance(attend_positions, list):
+                attend_positions = None
+
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
             
@@ -202,7 +209,6 @@ class MegatronGenerate(Resource):
                         print(f"{k}: {v}", flush=True)
                 # print(json.dumps(request_json),flush=True)
                 print("start time: ", datetime.datetime.now())
-            
 
             if beam_width is not None:
                 self.send_do_beam_search()  # Tell other ranks we're doing beam_search
@@ -243,7 +249,8 @@ class MegatronGenerate(Resource):
                         prevent_newline_after_colon=prevent_newline_after_colon,
                         random_seed=random_seed,
                         ignore_special_tokens=ignore_special_tokens,
-                        return_logits=logprobs
+                        return_logits=logprobs,
+                        attend_positions=attend_positions
                     )
                 # print("logits", response_logits)
                 return jsonify({"text": response,
@@ -425,9 +432,11 @@ class MegatronModifyWindowSize(Resource):
             if ws is not None:
                 return generate_error(ws)
         elif len(ws) != 2:
-            return generate_error(ws)
+            if len(ws) != 32:
+                return generate_error(ws)
         elif not all(isinstance(x, int) for x in ws):
-            return generate_error(ws) 
+            if len(ws) != 32:
+                return generate_error(ws)
         no_log = not False
         if "no_log" in request.get_json():
             no_log = request.get_json()["no_log"]
@@ -449,18 +458,6 @@ class MegatronModifyWindowSize(Resource):
                 return ve.args[0], 400
             print("end time: ", datetime.datetime.now())
 
-class MegatronGeneralAPI(MegatronGenerate):
-    def __init__(self, model):
-        super().__init__(model)
-
-    @staticmethod
-    def send_do_generate():
-        choice = torch.tensor([GENERAL_API_NUM], dtype=torch.long, device='cuda')
-        torch.distributed.broadcast(choice, 0)
-
-    def put(self):
-        raw_json = request.get_json()
-        required_keys = ["prompts", "tokens_to_generate"]
 
 
 

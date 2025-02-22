@@ -529,6 +529,7 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
         attention_mask: Tensor,
         attn_mask_type: AttnMaskType,
         packed_seq_params: PackedSeqParams = None,
+            **kwargs
     ):
         packed_seq_kwargs = (
             dataclasses.asdict(packed_seq_params) if packed_seq_params is not None else {}

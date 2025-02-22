@@ -41,18 +41,21 @@ except ImportError:
     warnings.warn(f'Apex is not installed. Falling back to Torch LayerNorm')
     LNImpl = WrappedTorchLayerNorm
 try:
-    from megatron.core.transformer.custom_layers.dkernel import DKernelLocalStrideSparseAttention
+    from megatron.core.transformer.custom_layers.dkernel import DKernelLocalStrideSparseAttention, \
+    DKernelPredefinedSparseAttention
+
     HAVE_DKERNEL = True
-except ImportError:
+except ImportError as e:
     import warnings
     from megatron.core.transformer.torch_layer_norm import WrappedTorchLayerNorm
 
-    # warnings.warn(f'DKernel is not installed. ')
+    warnings.warn(f'DKernel is not installed. ')
+    print(e)
     HAVE_DKERNEL = False
 
 # Use this spec to use lower level Transformer Engine modules (required for fp8 training)
 def get_gpt_sparse_layer_with_transformer_engine_spec(
-    num_experts: int = None, moe_grouped_gemm: bool = False, qk_layernorm: bool = False
+    num_experts: int = None, moe_grouped_gemm: bool = False, qk_layernorm: bool = False, dynamic: bool = False
 ) -> ModuleSpec:
     mlp = _get_mlp_module_spec(
         use_te=True, num_experts=num_experts, moe_grouped_gemm=moe_grouped_gemm
@@ -65,7 +68,7 @@ def get_gpt_sparse_layer_with_transformer_engine_spec(
                 params={"attn_mask_type": AttnMaskType.causal},
                 submodules=SelfAttentionSubmodules(
                     linear_qkv=TELayerNormColumnParallelLinear,
-                    core_attention=DKernelLocalStrideSparseAttention,
+                    core_attention=DKernelLocalStrideSparseAttention if not dynamic else DKernelPredefinedSparseAttention,
                     linear_proj=TERowParallelLinear,
                     # TENorm significantly harms convergence when used
                     # for QKLayerNorm; we instead use the Apex implementation.

@@ -18,7 +18,7 @@ class ForwardStep:
     We use a class here to hide the inference parameters
     from the outside caller."""
 
-    def __init__(self, model, max_batch_size, max_sequence_length):
+    def __init__(self, model, max_batch_size, max_sequence_length, attend_positions=None):
         """Set values so we don't need to do it multiple times."""
         # Make sure model is in eval mode.
         assert not isinstance(model, Iterable), \
@@ -28,6 +28,8 @@ class ForwardStep:
         # Initialize inference parameters.
         self.inference_params = InferenceParams(max_batch_size,
                                                 max_sequence_length)
+        if attend_positions:
+            self.inference_params.other_kwargs["pattern_id"] = attend_positions[0]
         # Pipelining arguments.
         args = get_args()
         self.pipeline_size_larger_than_one = (

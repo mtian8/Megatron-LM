@@ -34,7 +34,9 @@ def generate_and_post_process(model,
                               prevent_newline_after_colon=False,
                               random_seed=-1,
                               return_logits=False,
-                              ignore_special_tokens=False):
+                              ignore_special_tokens=False,
+                              attend_positions=None
+                              ):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
 
@@ -55,7 +57,8 @@ def generate_and_post_process(model,
         stop_on_double_eol=stop_on_double_eol,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
-        random_seed=random_seed)
+        random_seed=random_seed,
+        attend_positions=attend_positions)
 
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
@@ -93,7 +96,8 @@ def generate(model,
              stop_on_double_eol=False,
              stop_on_eol=False,
              prevent_newline_after_colon=False,
-             random_seed=-1):
+             random_seed=-1,
+             attend_positions=None):
     """Given prompts and input parameters, run inference and return:
        tokens: prompts plus the generated tokens.
        lengths: length of the prompt + generations. Note that we can
@@ -103,6 +107,7 @@ def generate(model,
     """
 
     # Make sure input params are avaialble to all ranks.
+    # print(f"[Rank {torch.distributed.get_rank()}] tokens_to_generate: {tokens_to_generate}")
     values = [tokens_to_generate,
               return_output_log_probs,
               top_k_sampling, top_p_sampling, top_p_decay, top_p_bound,
@@ -125,6 +130,37 @@ def generate(model,
     stop_on_eol = bool(values_float_tensor[10].item())
     prevent_newline_after_colon = bool(values_float_tensor[11].item())
     random_seed = int(values_float_tensor[12].item())
+    values_int_tensor = [0 for _ in range(33)]
+    if attend_positions is not None:  # only support batch size 1
+        for i, instance in enumerate(attend_positions[0]):
+            values_int_tensor[i * 2 + 1] = instance[0]
+            values_int_tensor[i * 2 + 2] = instance[1]
+        values_int_tensor[0] = len(attend_positions[0])
+    values_int_tensor = broadcast_int_list(len(values_int_tensor), int_list=values_int_tensor)
+    if values_int_tensor[0] > 0:
+        attend_positions = [[]]
+        for i in range(values_int_tensor[0]):
+            attend_positions[0].append([values_int_tensor[i * 2 + 1].item(), values_int_tensor[i * 2 + 2].item()])
+    else:
+        attend_positions = None
+
+
+    print(f"[Rank {torch.distributed.get_rank()}] attend_positions: {attend_positions}")
+    # broadcast attend_positions
+    # values = []
+    # if attend_positions is not None:
+    #     for instance in attend_positions:
+    #         values.append(2)
+    #         for pair in instance:
+    #             values.extend(pair)
+    #
+    # values_int_tensor = broadcast_int_list(len(values), int_list=values)
+    # attend_positions = []
+    # for value in values_int_tensor:
+    #     if value == 2:
+    #         attend_positions.append([])
+    #     else:
+    #         attend_positions[-1].append(bool(value))
 
     if random_seed != -1:
         torch.random.manual_seed(random_seed)
@@ -140,7 +176,7 @@ def generate(model,
     if tokens_to_generate == 0:
         return score_and_return_on_first_stage(
             model, context_tokens_tensor, context_length_tensor)
-
+    # print(f"[Rank {torch.distributed.get_rank()}] generate_tokens_probs_and_return_on_first_stage")
     # Main inference function.
     # Note that the outputs are available on the first stage.
     return generate_tokens_probs_and_return_on_first_stage(
@@ -154,7 +190,9 @@ def generate(model,
         use_eod_token_for_early_termination=use_eod_token_for_early_termination,
         stop_on_double_eol=stop_on_double_eol,
         stop_on_eol=stop_on_eol,
-        prevent_newline_after_colon=prevent_newline_after_colon)
+        prevent_newline_after_colon=prevent_newline_after_colon,
+        attend_positions=attend_positions
+    )
 
 def beam_search_and_post_process(model,
                                  forward_step=ForwardStep,
@@ -215,14 +253,36 @@ def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_si
             beam_size, stop_token=stop_token, num_return_gen=num_return_gen, length_penalty=length_penalty,
             prevent_newline_after_colon=prevent_newline_after_colon)
 
-def modify_window_size(model, window_size=None):
+def modify_window_size(model, window_size="Not rank 0"):
     """Modify the window size of the model."""
+    _window_size = window_size
     if window_size is None:
         window_size = (-1, 0)
-    values = window_size
+    elif window_size == "Not rank 0":
+        window_size = [0 for _ in range(33)]
+    values = [-1 for _ in range(33)]
+
+    if _window_size != "Not rank 0":
+        for i in range(len(window_size)):
+            if window_size[i] is not None:
+                values[i + 1] = window_size[i]
+        values[0] = len(window_size)
+    print("Before sync", values)
+
     values_int_tensor = broadcast_int_list(len(values), int_list=values)
-    window_size = (values_int_tensor[0].item(), values_int_tensor[1].item())
-    for layer in model._modules["module"].decoder.layers:
+    window_size = [x.item() for x in values_int_tensor]
+    window_size_len = window_size[0]
+    window_size = window_size[1: window_size_len + 1]
+    print("After sync", window_size)
+
+    for i, layer in enumerate(model._modules["module"].decoder.layers):
         attn = layer.self_attention.core_attention
-        attn.window_size = check_set_window_size(attn.attn_mask_type, window_size)
+        current_window_size = tuple(window_size)
+        if len(current_window_size) != 2:
+            if window_size[i] is None:
+                current_window_size = (-1, 0)
+            else:
+                current_window_size = (window_size[i], 0)
+        print(f"Layer {i}: {current_window_size}")
+        attn.window_size = check_set_window_size(attn.attn_mask_type, current_window_size)
     return

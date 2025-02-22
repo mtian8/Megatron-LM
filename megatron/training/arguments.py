@@ -693,7 +693,7 @@ def _add_transformer_engine_args(parser):
                        help='Execute wgrad in higher precision even for FP8 runs',
                        dest='fp8_wgrad')
     group.add_argument('--transformer-impl', default='transformer_engine',
-                       choices=['local', 'transformer_engine', 'dkernel'],
+                       # choices=['local', 'transformer_engine', 'dkernel', 'dkernel_dynamic'],
                        help='Which Transformer implementation to use.')
     group.add_argument('--window-size', type=int, nargs=2, default=None, help='Sliding window size for local attention')
     return parser
