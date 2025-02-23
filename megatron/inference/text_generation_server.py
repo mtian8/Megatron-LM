@@ -190,11 +190,11 @@ class MegatronGenerate(Resource):
             if not isinstance(ignore_special_tokens, bool):
                 return "ignore_special_tokens must be a boolean value"
 
-        attend_positions = None
-        if "attend_positions" in request_json:
-            attend_positions = request_json["attend_positions"]
-            if not isinstance(attend_positions, list):
-                attend_positions = None
+        oracle_positions = None
+        if "oracle_positions" in request_json:
+            oracle_positions = request_json["oracle_positions"]
+            if not isinstance(oracle_positions, list):
+                oracle_positions = None
 
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
@@ -250,7 +250,7 @@ class MegatronGenerate(Resource):
                         random_seed=random_seed,
                         ignore_special_tokens=ignore_special_tokens,
                         return_logits=logprobs,
-                        attend_positions=attend_positions
+                        oracle_positions=oracle_positions
                     )
                 # print("logits", response_logits)
                 return jsonify({"text": response,

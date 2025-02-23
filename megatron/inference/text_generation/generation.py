@@ -99,7 +99,7 @@ def generate_tokens_probs_and_return_on_first_stage(
         stop_on_double_eol=False,
         stop_on_eol=False,
         prevent_newline_after_colon=True,
-        attend_positions=None,
+        oracle_positions=None,
         ):
     """Main token generation function.
 
@@ -156,7 +156,7 @@ def generate_tokens_probs_and_return_on_first_stage(
         raise ValueError("Too many tokens.  " + str(max_sequence_length*batch_size)+ " is greater than "+str(args.max_tokens_to_oom))
 
     # forward step.
-    forward_step = forward_step(model, batch_size, max_sequence_length, attend_positions)
+    forward_step = forward_step(model, batch_size, max_sequence_length, oracle_positions)
 
     # Added termination_id to support the case that we want to terminate the
     # generation once that id is generated.

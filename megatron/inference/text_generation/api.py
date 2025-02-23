@@ -35,7 +35,7 @@ def generate_and_post_process(model,
                               random_seed=-1,
                               return_logits=False,
                               ignore_special_tokens=False,
-                              attend_positions=None
+                              oracle_positions=None
                               ):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
@@ -58,7 +58,7 @@ def generate_and_post_process(model,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
         random_seed=random_seed,
-        attend_positions=attend_positions)
+        oracle_positions=oracle_positions)
 
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
@@ -97,7 +97,7 @@ def generate(model,
              stop_on_eol=False,
              prevent_newline_after_colon=False,
              random_seed=-1,
-             attend_positions=None):
+             oracle_positions=None):
     """Given prompts and input parameters, run inference and return:
        tokens: prompts plus the generated tokens.
        lengths: length of the prompt + generations. Note that we can
@@ -130,37 +130,22 @@ def generate(model,
     stop_on_eol = bool(values_float_tensor[10].item())
     prevent_newline_after_colon = bool(values_float_tensor[11].item())
     random_seed = int(values_float_tensor[12].item())
-    values_int_tensor = [0 for _ in range(33)]
-    if attend_positions is not None:  # only support batch size 1
-        for i, instance in enumerate(attend_positions[0]):
+    values_int_tensor = [0 for _ in range(33)]  # only support num_oracle_positions <= 16
+    if oracle_positions is not None:  # [batch_size, num_oracle_positons, 2]; only support batch size 1
+        for i, instance in enumerate(oracle_positions[0]):
             values_int_tensor[i * 2 + 1] = instance[0]
             values_int_tensor[i * 2 + 2] = instance[1]
-        values_int_tensor[0] = len(attend_positions[0])
+        values_int_tensor[0] = len(oracle_positions[0])
     values_int_tensor = broadcast_int_list(len(values_int_tensor), int_list=values_int_tensor)
     if values_int_tensor[0] > 0:
-        attend_positions = [[]]
+        oracle_positions = [[]]
         for i in range(values_int_tensor[0]):
-            attend_positions[0].append([values_int_tensor[i * 2 + 1].item(), values_int_tensor[i * 2 + 2].item()])
+            oracle_positions[0].append([values_int_tensor[i * 2 + 1].item(), values_int_tensor[i * 2 + 2].item()])
     else:
-        attend_positions = None
+        oracle_positions = None
 
 
-    print(f"[Rank {torch.distributed.get_rank()}] attend_positions: {attend_positions}")
-    # broadcast attend_positions
-    # values = []
-    # if attend_positions is not None:
-    #     for instance in attend_positions:
-    #         values.append(2)
-    #         for pair in instance:
-    #             values.extend(pair)
-    #
-    # values_int_tensor = broadcast_int_list(len(values), int_list=values)
-    # attend_positions = []
-    # for value in values_int_tensor:
-    #     if value == 2:
-    #         attend_positions.append([])
-    #     else:
-    #         attend_positions[-1].append(bool(value))
+    print(f"[Rank {torch.distributed.get_rank()}] oracle_positions: {oracle_positions}")
 
     if random_seed != -1:
         torch.random.manual_seed(random_seed)
@@ -191,7 +176,7 @@ def generate(model,
         stop_on_double_eol=stop_on_double_eol,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
-        attend_positions=attend_positions
+        oracle_positions=oracle_positions
     )
 
 def beam_search_and_post_process(model,

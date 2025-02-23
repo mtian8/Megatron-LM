@@ -268,67 +268,40 @@ class Attention(MegatronModule, ABC):
         if not hasattr(inference_params, "other_kwargs"):
             return rotary_pos_emb
 
-
-
         # oracle mode: pattern_id given
-        # if not inference_params.other_kwargs.get("pattern_id", None):
-        #     return rotary_pos_emb
-        # pattern_id = inference_params.other_kwargs["pattern_id"]
-        # if not hasattr(self.core_attention, "get_attention_mask"):
-        #     return rotary_pos_emb
-        # if self.layer_number <= 3:
-        #     return rotary_pos_emb
-        # first_block_start, first_block_end, second_block_start, second_block_end, sliding_window_size, block_size = \
-        #     self.core_attention.get_attention_mask(pattern_id)
-        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
-        #     print(f"[rank {torch.distributed.get_rank()}] pattern_id for ROPE modification: {pattern_id} => pattern {self.core_attention.choose_attention_pattern_id({'pattern_id': pattern_id})}")
-
+        oracle_mode = inference_params.other_kwargs.get("oracle_mode", "off")
+        if oracle_mode == "on":
+            if not inference_params.other_kwargs.get("oracle_positions", None):
+                return rotary_pos_emb
+            oracle_positions = inference_params.other_kwargs["oracle_positions"]
+            focused_positions = self.core_attention.get_focused_positions_from_positions(oracle_positions)
 
         # real-world: infer from extracted_pattern_id
-        if not inference_params.other_kwargs.get("extracted_pattern_id", None):
-            return rotary_pos_emb
-        if len(inference_params.other_kwargs["extracted_pattern_id"]) != 1:
-            return rotary_pos_emb
-        extracted_pattern_id = inference_params.other_kwargs["extracted_pattern_id"][0]
-        if not hasattr(self.core_attention, "get_attention_mask_by_id"):
-            return rotary_pos_emb
-        first_block_start, first_block_end, second_block_start, second_block_end, sliding_window_size, block_size = \
-            self.core_attention.get_attention_mask_by_id(extracted_pattern_id)
-        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
-            pattern_id = inference_params.other_kwargs.get("pattern_id", None)
-            if pattern_id is not None:
-                print(f"[rank {torch.distributed.get_rank()}] ROPE modification: pos {pattern_id} "
-                      f" => id {self.core_attention.choose_attention_pattern_id({'pattern_id': pattern_id})}; EXTRACTED={extracted_pattern_id}")
-
-        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
-        #     print(f"[rank {torch.distributed.get_rank()}] first_block_start: {first_block_start}, first_block_end: {first_block_end}, second_block_start: {second_block_start}, second_block_end: {second_block_end}, sliding_window_size: {sliding_window_size}, block_size: {block_size}")
-        if first_block_start == -1:  # full attention
-            return rotary_pos_emb
-        if sliding_window_size == -1:  # no sliding window
+        else:
+            if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
+                return rotary_pos_emb
+            dynamic_pattern_id = inference_params.other_kwargs["dynamic_pattern_id"]
+            focused_positions = self.core_attention.get_focused_positions_from_pattern_id(dynamic_pattern_id)
+        if focused_positions is None or len(focused_positions.intervals) == 0:  # full attention
             return rotary_pos_emb
 
         q_pos_emb, k_pos_emb = rotary_pos_emb
 
-        sequence_start = inference_params.sequence_len_offset
         sequence_end = key.size(0)
-        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
-        #     print(
-        #         f"[rank {torch.distributed.get_rank()}] sequence_start {sequence_start}, sequence_end {sequence_end}")
-
         maximum_sequence_end = q_pos_emb.size(0)
-        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
-        #     print(f"[rank {torch.distributed.get_rank()}] q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}, key: {key.shape}, value: {value.shape}")
-        if second_block_start == -1:  # use sliding window start as second block start
-            second_block_start = (sequence_end - sliding_window_size) // block_size * block_size
-            second_block_end = sequence_end
+
+        _, window_start, window_end, _ = focused_positions.get_actual_window(sequence_end)
+        if len(focused_positions.intervals) == 1:
+            second_block_start, second_block_end = window_start, window_end
         else:
+            second_block_start, second_block_end = focused_positions.intervals[1]
             second_block_end = min(second_block_end, sequence_end)
+        first_block_start, first_block_end = focused_positions.intervals[0]
         # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
         #     print(f"[rank {torch.distributed.get_rank()}] second_block_start: {second_block_start}, first_block_end: {first_block_end}, second_block_end: {second_block_end}")
         if second_block_start <= first_block_end:
             return rotary_pos_emb
 
-        second_block_len = second_block_end - second_block_start
         modification_len = maximum_sequence_end - second_block_start
 
 
@@ -371,14 +344,12 @@ class Attention(MegatronModule, ABC):
         if extra_kwargs["prefill"]:
             if self.layer_number == 1:
                 inference_params.other_kwargs["tokens_generated"] = 0
-                inference_params.other_kwargs["getting_pattern"] = True
-                inference_params.other_kwargs["extracted_pattern_id"] = []
+                inference_params.other_kwargs["dynamic_pattern_id"] = []
         else:
             if self.layer_number == 1:
                 inference_params.other_kwargs["tokens_generated"] += key.size(0)
         extra_kwargs["tokens_generated"] = inference_params.other_kwargs["tokens_generated"]
-        extra_kwargs["getting_pattern"] = inference_params.other_kwargs["getting_pattern"]
-        extra_kwargs["extracted_pattern_id"] = inference_params.other_kwargs["extracted_pattern_id"]
+        extra_kwargs["dynamic_pattern_id"] = inference_params.other_kwargs["dynamic_pattern_id"]
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
