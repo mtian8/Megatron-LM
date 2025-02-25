@@ -196,6 +196,18 @@ class MegatronGenerate(Resource):
             if not isinstance(oracle_positions, list):
                 oracle_positions = None
 
+        oracle_mode = "off"
+        if "oracle_mode" in request_json:
+            oracle_mode = request_json["oracle_mode"]
+            if oracle_mode not in ["on", "off", "debug"]:
+                oracle_mode = "debug"
+
+        distance_between_positions = 0
+        if "distance_between_positions" in request_json:
+            distance_between_positions = request_json["distance_between_positions"]
+            if not isinstance(distance_between_positions, int):
+                distance_between_positions = 0
+
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
             
@@ -250,7 +262,9 @@ class MegatronGenerate(Resource):
                         random_seed=random_seed,
                         ignore_special_tokens=ignore_special_tokens,
                         return_logits=logprobs,
-                        oracle_positions=oracle_positions
+                        oracle_positions=oracle_positions,
+                        oracle_mode=oracle_mode,
+                        distance_between_positions=distance_between_positions
                     )
                 # print("logits", response_logits)
                 return jsonify({"text": response,

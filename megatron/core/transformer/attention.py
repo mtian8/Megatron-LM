@@ -274,46 +274,59 @@ class Attention(MegatronModule, ABC):
             if not inference_params.other_kwargs.get("oracle_positions", None):
                 return rotary_pos_emb
             oracle_positions = inference_params.other_kwargs["oracle_positions"]
-            focused_positions = self.core_attention.get_focused_positions_from_positions(oracle_positions)
+            focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
 
         # real-world: infer from extracted_pattern_id
         else:
             if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
                 return rotary_pos_emb
             dynamic_pattern_id = inference_params.other_kwargs["dynamic_pattern_id"]
+            if len(dynamic_pattern_id) == 0:
+                return rotary_pos_emb
+            dynamic_pattern_id = dynamic_pattern_id[0]
             focused_positions = self.core_attention.get_focused_positions_from_pattern_id(dynamic_pattern_id)
         if focused_positions is None or len(focused_positions.intervals) == 0:  # full attention
             return rotary_pos_emb
 
         q_pos_emb, k_pos_emb = rotary_pos_emb
-
         sequence_end = key.size(0)
         maximum_sequence_end = q_pos_emb.size(0)
 
-        _, window_start, window_end, _ = focused_positions.get_actual_window(sequence_end)
-        if len(focused_positions.intervals) == 1:
-            second_block_start, second_block_end = window_start, window_end
-        else:
-            second_block_start, second_block_end = focused_positions.intervals[1]
-            second_block_end = min(second_block_end, sequence_end)
-        first_block_start, first_block_end = focused_positions.intervals[0]
-        # if torch.distributed.get_rank() == 0 and self.layer_number == 5:
-        #     print(f"[rank {torch.distributed.get_rank()}] second_block_start: {second_block_start}, first_block_end: {first_block_end}, second_block_end: {second_block_end}")
-        if second_block_start <= first_block_end:
-            return rotary_pos_emb
+        intervals = focused_positions.get_all_positions(seq_len=sequence_end, attention_sink=True)
+        last_start = 0
+        embeddings_source = [(0, 0) for _ in intervals]
+        new_embeddings_k = []
+        new_embeddings_q = []
+        debug_str = ""
+        src_end = 0
+        k_pos_emb_128 = torch.ones_like(k_pos_emb) * k_pos_emb[128:129, :, :, :]
+        q_pos_emb_128 = torch.ones_like(q_pos_emb) * q_pos_emb[128:129, :, :, :]
+        for idx in range(len(intervals)):
+            start, end = intervals[idx]
+            if idx > 0:
+                new_embeddings_k.append(k_pos_emb[last_start: start])
+                new_embeddings_q.append(q_pos_emb[last_start: start])
+                # new_embeddings_k.append(k_pos_emb[src_end: src_end + 1].expand(start - last_start, -1, -1, -1))
+                # new_embeddings_q.append(q_pos_emb[src_end: src_end + 1].expand(start - last_start, -1, -1, -1))
+                debug_str += f"[{src_end}:{src_end + 1} (*{start - last_start})]"
 
-        modification_len = maximum_sequence_end - second_block_start
-
-
-        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
-            print(f"[rank {torch.distributed.get_rank()}] Moving embeddings of len {modification_len} from {first_block_end} to {second_block_start}")
-            print(f"[rank {torch.distributed.get_rank()}] Before: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}")
-        # copy
-        q_pos_emb = torch.cat([q_pos_emb[:second_block_start], q_pos_emb[first_block_end: first_block_end + modification_len]], dim=0)
-        k_pos_emb = torch.cat([k_pos_emb[:second_block_start], k_pos_emb[first_block_end: first_block_end + modification_len]], dim=0)
-        if torch.distributed.get_rank() == 0 and self.layer_number == 2:
+            if src_end == 128:
+                src_end = start
+            src_start = src_end
+            src_end = src_end + end - start
+            new_embeddings_k.append(k_pos_emb[src_start: src_end])
+            new_embeddings_q.append(q_pos_emb[src_start: src_end])
+            # new_embeddings_q.append(q_pos_emb[start: end])
+            debug_str += f"[{src_start}:{src_end}]"
+            last_start = end
+        new_embeddings_k.append(k_pos_emb[last_start:])
+        new_embeddings_q.append(q_pos_emb[last_start:])
+        debug_str += f"[{src_end}:{src_end + len(q_pos_emb) - last_start}]"
+        k_pos_emb = torch.cat(new_embeddings_k, dim=0)
+        q_pos_emb = torch.cat(new_embeddings_q, dim=0)
+        if torch.distributed.get_rank() == 0 and self.layer_number == 3:
             print(
-                f"[rank {torch.distributed.get_rank()}] After: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}")
+                f"[rank {torch.distributed.get_rank()}] Intervals: {intervals}, !{debug_str}, After: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}")
         return q_pos_emb, k_pos_emb
 
 
@@ -350,6 +363,8 @@ class Attention(MegatronModule, ABC):
                 inference_params.other_kwargs["tokens_generated"] += key.size(0)
         extra_kwargs["tokens_generated"] = inference_params.other_kwargs["tokens_generated"]
         extra_kwargs["dynamic_pattern_id"] = inference_params.other_kwargs["dynamic_pattern_id"]
+        extra_kwargs["oracle_mode"] = inference_params.other_kwargs["oracle_mode"]
+        extra_kwargs["oracle_positions"] = inference_params.other_kwargs["oracle_positions"]
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference

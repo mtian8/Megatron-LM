@@ -35,7 +35,9 @@ def generate_and_post_process(model,
                               random_seed=-1,
                               return_logits=False,
                               ignore_special_tokens=False,
-                              oracle_positions=None
+                              oracle_positions=None,
+                              oracle_mode="off",
+                              distance_between_positions=0
                               ):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
@@ -58,7 +60,10 @@ def generate_and_post_process(model,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
         random_seed=random_seed,
-        oracle_positions=oracle_positions)
+        oracle_positions=oracle_positions,
+        oracle_mode=oracle_mode,
+        distance_between_positions=distance_between_positions
+    )
 
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
@@ -97,7 +102,10 @@ def generate(model,
              stop_on_eol=False,
              prevent_newline_after_colon=False,
              random_seed=-1,
-             oracle_positions=None):
+             oracle_positions=None,
+             oracle_mode="off",
+             distance_between_positions=0
+             ):
     """Given prompts and input parameters, run inference and return:
        tokens: prompts plus the generated tokens.
        lengths: length of the prompt + generations. Note that we can
@@ -144,6 +152,17 @@ def generate(model,
     else:
         oracle_positions = None
 
+    values_int_tensor[0] = distance_between_positions
+    values_int_tensor[1] = 0 if oracle_mode == "off" else (1 if oracle_mode == "debug" else 2)
+    values_int_tensor = broadcast_int_list(2, int_list=values_int_tensor[:2])
+    distance_between_positions = values_int_tensor[0]
+    if values_int_tensor[1] == 0:
+        oracle_mode = "off"
+    elif values_int_tensor[1] == 1:
+        oracle_mode = "debug"
+    else:
+        oracle_mode = "on"
+
 
     print(f"[Rank {torch.distributed.get_rank()}] oracle_positions: {oracle_positions}")
 
@@ -176,7 +195,9 @@ def generate(model,
         stop_on_double_eol=stop_on_double_eol,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
-        oracle_positions=oracle_positions
+        oracle_positions=oracle_positions,
+        oracle_mode=oracle_mode,
+        distance_between_positions=distance_between_positions
     )
 
 def beam_search_and_post_process(model,

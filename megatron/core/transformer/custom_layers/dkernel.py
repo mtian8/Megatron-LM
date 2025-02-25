@@ -30,6 +30,8 @@ from customized_dkernel.utils import multiple_of, get_sparse_attn_mask, dense_to
 import triton
 import warnings
 
+from megatron.inference.text_generation.communication import broadcast_int_list
+
 
 def _get_extra_dkernel_kwargs(config: TransformerConfig):
     pass
@@ -548,7 +550,7 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
         # force modify local blocks (sliding window)
         sparse_local_blocks = oracle_size // block_size
         self.sparse_local_blocks = oracle_size // block_size
-        self.window_size = sparse_local_blocks * block_size
+        self.sparse_window_size = sparse_local_blocks * block_size  # avoid using "window_size" since it can be modified
 
         device = torch.cuda.current_device() if torch.cuda.is_available() else 'cpu'
 
@@ -628,7 +630,7 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
     def get_focused_positions_from_positions(self, positions):
         if positions is None:
             return None
-        return FocusedPositions(self.config.sparse_block_size, positions, self.window_size)
+        return FocusedPositions(self.config.sparse_block_size, positions, self.sparse_window_size)
 
     def get_focused_positions_from_oracle_positions(self, oracle_positions):
         focused_positions = self.get_focused_positions_from_positions(oracle_positions)
@@ -647,7 +649,9 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
 
             if len(focused_positions.intervals) == 1:
                 rounded_interval = round_interval_by_block(focused_positions.intervals[0], (block_size + 1) // 2)
-                focused_positions.intervals = [[rounded_interval[0][0], min(rounded_interval[0][0] + block_size,
+                if rounded_interval[1] < block_size:
+                    rounded_interval = (0, block_size)
+                focused_positions.intervals = [[rounded_interval[1] - block_size, min(rounded_interval[1],
                                                                             self.config.sparse_max_seq_len)]]
                 return focused_positions
 
@@ -658,6 +662,7 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
             return self.get_focused_positions_from_positions([[pattern_id * self.oracle_size,
                                                                (pattern_id + 1) * self.oracle_size]])
         if pattern_id < self.num_oracles * 2 - 1:
+            pattern_id -= self.num_oracles
             return self.get_focused_positions_from_positions([[pattern_id * self.oracle_size + self.oracle_size // 2,
                                                                (pattern_id + 1) * self.oracle_size +
                                                                self.oracle_size // 2]])
@@ -669,16 +674,13 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
                                                           [self.oracle_size * y, self.oracle_size * (y + 1)]])
 
     def choose_attention_id_from_extra_kwargs(self, extra_kwargs):
-        oracle_mode = extra_kwargs.get("oracle_mode"), "off"
+        oracle_mode = extra_kwargs.get("oracle_mode", "off")
         if oracle_mode != "on":  # dynamic
-            if self.layer_number <= 2 and extra_kwargs["dynamic_pattern_id"].__len__() < 1:
-                return -1
+            pattern_id = extra_kwargs.get("dynamic_pattern_id", None)
+            if isinstance(pattern_id, list) and len(pattern_id) > 0:
+                return pattern_id[0]
             else:
-                pattern_id = extra_kwargs.get("dynamic_pattern_id", None)
-                if isinstance(pattern_id, list) and len(pattern_id) > 0:
-                    return pattern_id[0]
-                else:
-                    return -1
+                return -1
         else:  # from oracle
             oracle_positions = extra_kwargs.get("oracle_positions", None)
             block_size = self.oracle_size
@@ -704,6 +706,8 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
 
     def choose_attention_from_extra_kwargs(self, extra_kwargs):
         attention_id = self.choose_attention_id_from_extra_kwargs(extra_kwargs)
+        if self.layer_number == 1:
+            print(f"[rank {torch.distributed.get_rank()}] Attention id: {attention_id}", )
         return self.attentions[attention_id]
 
     def get_pattern_id_iter(self):
@@ -767,54 +771,25 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
         best_pattern_id, max_coverage = -1, min_coverage * prob_target.sum(dim=pattern_reduction_dim)
         real_best_pattern_id, real_max_coverage = -1, 0
         for j in self.get_pattern_id_iter():
-            block1_start, block1_end, block2_start, block2_end, sliding_window_size, sparse_block_size = \
-                self.get_attention_mask_by_id(j)
-            if sliding_window_size == -1:
-                # skip the full attention
-                break
-            sequence_end = kv_len
-            sliding_window_start = (sequence_end - sliding_window_size) // sparse_block_size * sparse_block_size
-            sliding_window_end = sequence_end
-
-            block1_start //= granularity
-            block1_end = (block1_end - 1) // granularity + 1
-            block2_start //= granularity
-            block2_end = (block2_end - 1) // granularity + 1
-            sliding_window_start //= granularity
-            sliding_window_end = (sliding_window_end - 1) // granularity + 1
+            focused_positions = self.get_focused_positions_from_pattern_id(j)
+            if len(focused_positions.intervals) == 0:
+                break  # skip the full attention
+            all_intervals = focused_positions.get_all_positions(kv_len, attention_sink=True, granularity=granularity)
 
             if pattern_reduction_dim:
                 sum_prob = torch.zeros_like(prob_target[:, 0])
             else:
                 sum_prob = 0
 
-            # avoid attention sink
-            max_start = 1
-            sum_prob += prob_target[:, 0:1].sum(dim=pattern_reduction_dim)
-
-            # sort block1, block2, sliding window
-            l_1 = [(block1_start, block1_end), (sliding_window_start, sliding_window_end)]
-            l_1.sort()
-            (block1_start, block1_end), (sliding_window_start, sliding_window_end) = l_1
-
-            max_start = max(max_start, block1_start)
-            if block1_start != -1:
-                sum_prob += prob_target[:, max_start:block1_end].sum(dim=pattern_reduction_dim)
-
-            max_start = max(max(max_start, block1_end), block2_start)
-            if block2_start != -1:
-                sum_prob += prob_target[:, max_start:block2_end].sum(dim=pattern_reduction_dim)
-
-            max_start = max(max(max_start, block2_end), sliding_window_start)
-            if sliding_window_start != -1:
-                sum_prob += prob_target[:, max_start:sliding_window_end].sum(dim=pattern_reduction_dim)
+            for start, end in all_intervals:
+                sum_prob += prob_target[:, start:end].sum(dim=pattern_reduction_dim)
 
             if pattern_reduction_dim:
                 if best_pattern_id == -1:
                     best_pattern_id = torch.zeros_like(sum_prob) - 1
                 best_pattern_id[sum_prob > max_coverage] = j
-                max_coverage[sum_prob > max_coverage] = 100 * prob_target.sum(
-                    dim=pattern_reduction_dim)  # no update anymore
+                # no update anymore
+                max_coverage[sum_prob > max_coverage] = 100 * prob_target.sum(dim=pattern_reduction_dim)
             else:
                 if sum_prob > max_coverage:
                     max_coverage = 100 * prob_target.sum(dim=pattern_reduction_dim)  # no update anymore
@@ -822,7 +797,8 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
                 if sum_prob > real_max_coverage:
                     real_max_coverage = sum_prob
                     real_best_pattern_id = j
-
+            # if torch.distributed.get_rank() == 0:
+            #     print("Pattern", j, ": All intervals", all_intervals, "coverage", sum_prob, "max_coverage:", max_coverage)
         if head_reduction == "majority":
             votes = {}
             for pid in best_pattern_id:
@@ -920,9 +896,63 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
         visual_block_size = rounded_kv_len // visual_block_count
 
         # compare prob with pattern
-        if self.layer_number == 2:  # at layer 2
-            extracted_pattern_id_global, _, _, _, _ = self.extract_pattern_from_prob(
+        if self.layer_number == 1 and len(extra_kwargs["dynamic_pattern_id"]) == 0:  # at layer 2
+            extracted_pattern_id_global, _, prob_target, _, _ = self.extract_pattern_from_prob(
                 q_len, kv_len, prob, granularity=visual_block_size, head_reduction="none")
+            values_int_tensor = [-1, -1, -1, -1]
+            values_int_tensor[torch.distributed.get_rank()] = extracted_pattern_id_global
+            for i in range(4):
+                xi = broadcast_int_list(1, int_list=values_int_tensor[i:i+1], rank=i)
+                values_int_tensor[i] = xi[0].item()
+            scores = {}
+            for i in range(4):
+                scores[values_int_tensor[i]] = scores.get(values_int_tensor[i], 0) + 1
+            extracted_pattern_id_global = -1
+            for pattern in scores:
+                if scores[pattern] >= 2:
+                    extracted_pattern_id_global = pattern
+                    break
+
+            def get_visual_prob(contents_to_print, pattern_id):
+                # calculate the maximum prob for each head
+                max_prob_for_each_head = contents_to_print.max(dim=-1, keepdim=True).values + 1e-8
+                # normalize the prob for each head
+                contents_to_print = contents_to_print / max_prob_for_each_head
+                # use ansi escape code from red to green to map 0 - 1
+                red_values = (255 * (1 - contents_to_print)).to(int)
+                green_values = (255 * contents_to_print).to(int)
+                probs_to_digits = (10 * contents_to_print).to(int)
+                probs_to_digits[probs_to_digits == 10] = 9
+                probs_to_digits2 = probs_to_digits.tolist()
+
+                # deal with pattern
+                focused_positions = self.get_focused_positions_from_pattern_id(pattern_id)
+
+                sw, bs = focused_positions.window_size, focused_positions.block_size
+                if len(focused_positions.intervals) == 0 or sw == -1:
+                    b1s_block, b1e_block, sws_block, swe_block = -1, -1, -1, -1
+
+                else:
+                    b1s, b1e = focused_positions.intervals[0]
+                    b1s_block = b1s // visual_block_size
+                    b1e_block = (b1e - 1) // visual_block_size + 1
+                    sliding_window_start = focused_positions.get_actual_window(kv_len)[1]
+                    sliding_window_end = kv_len
+                    sws_block = sliding_window_start // visual_block_size
+                    swe_block = (sliding_window_end - 1) // visual_block_size + 1
+                    # ignore b2
+                for j in range(len(probs_to_digits2)):
+                    if b1s_block <= j < b1e_block or sws_block <= j < swe_block:
+                        probs_to_digits2[j] = f"\033[5;4;48;2;{red_values[j].item()};{green_values[j].item()};0m{probs_to_digits2[j]}\033[0m"
+                    else:
+                        probs_to_digits2[j] = f"\033[48;2;{red_values[j].item()};{green_values[j].item()};0m{probs_to_digits2[j]}\033[0m"
+
+                visual_prob = ''.join(probs_to_digits2)
+                return visual_prob
+            # visual_prob = get_visual_prob(prob_target[0], extracted_pattern_id_global)
+            # print_string = f"[Rank {tp_rank}] {visual_prob} {extracted_pattern_id_global}"
+            # print(print_string)
+
             if isinstance(extra_kwargs.get("dynamic_pattern_id", None), list):
                 if len(extra_kwargs["dynamic_pattern_id"]) == 0:
                     extra_kwargs["dynamic_pattern_id"].append(extracted_pattern_id_global)
