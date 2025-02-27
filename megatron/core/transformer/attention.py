@@ -27,6 +27,7 @@ from megatron.core.utils import divide
 
 from .enums import AttnMaskType
 from .transformer_config import TransformerConfig
+from ..focused_positions import FocusedPositions
 
 try:
     import transformer_engine
@@ -268,39 +269,55 @@ class Attention(MegatronModule, ABC):
         if not hasattr(inference_params, "other_kwargs"):
             return rotary_pos_emb
 
-        # oracle mode: pattern_id given
-        oracle_mode = inference_params.other_kwargs.get("oracle_mode", "off")
-        if oracle_mode == "on":
-            if not inference_params.other_kwargs.get("oracle_positions", None):
-                return rotary_pos_emb
-            oracle_positions = inference_params.other_kwargs["oracle_positions"]
-            focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
-
-        # real-world: infer from extracted_pattern_id
+        # retrieve focused positions
+        # ignore oracle mode for distance_between_positions
+        distance_between_positions = inference_params.other_kwargs.get("distance_between_positions", 0)
+        if distance_between_positions:
+            focused_positions = FocusedPositions(1, inference_params.other_kwargs["oracle_positions"], 0)
         else:
-            if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
-                return rotary_pos_emb
-            dynamic_pattern_id = inference_params.other_kwargs["dynamic_pattern_id"]
-            if len(dynamic_pattern_id) == 0:
-                return rotary_pos_emb
-            dynamic_pattern_id = dynamic_pattern_id[0]
-            focused_positions = self.core_attention.get_focused_positions_from_pattern_id(dynamic_pattern_id)
+            # oracle mode: pattern_id given
+            oracle_mode = inference_params.other_kwargs.get("oracle_mode", "off")
+
+            if oracle_mode == "on":
+                if not inference_params.other_kwargs.get("oracle_positions", None):
+                    return rotary_pos_emb
+                oracle_positions = inference_params.other_kwargs["oracle_positions"]
+                focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
+
+            # real-world: infer from extracted_pattern_id
+            else:
+                if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
+                    return rotary_pos_emb
+                dynamic_pattern_id = inference_params.other_kwargs["dynamic_pattern_id"]
+                if len(dynamic_pattern_id) == 0:
+                    return rotary_pos_emb
+                dynamic_pattern_id = dynamic_pattern_id[0]
+                focused_positions = self.core_attention.get_focused_positions_from_pattern_id(dynamic_pattern_id)
+
         if focused_positions is None or len(focused_positions.intervals) == 0:  # full attention
             return rotary_pos_emb
 
         q_pos_emb, k_pos_emb = rotary_pos_emb
         sequence_end = key.size(0)
-        maximum_sequence_end = q_pos_emb.size(0)
+        maximum_sequence_end = inference_params.max_sequence_length
 
-        intervals = focused_positions.get_all_positions(seq_len=sequence_end, attention_sink=True)
+        if distance_between_positions:
+            intervals = focused_positions.get_all_positions(seq_len=sequence_end, attention_sink=False,
+                                                            merge_overlapped_intervals=False)
+        else:
+            intervals = focused_positions.get_all_positions(seq_len=sequence_end, attention_sink=True)
         last_start = 0
         embeddings_source = [(0, 0) for _ in intervals]
         new_embeddings_k = []
         new_embeddings_q = []
         debug_str = ""
         src_end = 0
-        k_pos_emb_128 = torch.ones_like(k_pos_emb) * k_pos_emb[128:129, :, :, :]
-        q_pos_emb_128 = torch.ones_like(q_pos_emb) * q_pos_emb[128:129, :, :, :]
+        # k_pos_emb_128 = torch.ones_like(k_pos_emb) * k_pos_emb[128:129, :, :, :]
+        # q_pos_emb_128 = torch.ones_like(q_pos_emb) * q_pos_emb[128:129, :, :, :]
+        if torch.distributed.get_rank() == 0 and self.layer_number == 3:
+            print(
+                f"[rank {torch.distributed.get_rank()}] Intervals: {intervals}, Before: q_pos_emb: {q_pos_emb.shape}, k_pos_emb: {k_pos_emb.shape}. Max seq len: {inference_params.max_sequence_length}")
+
         for idx in range(len(intervals)):
             start, end = intervals[idx]
             if idx > 0:
@@ -316,12 +333,15 @@ class Attention(MegatronModule, ABC):
             src_end = src_end + end - start
             new_embeddings_k.append(k_pos_emb[src_start: src_end])
             new_embeddings_q.append(q_pos_emb[src_start: src_end])
+
             # new_embeddings_q.append(q_pos_emb[start: end])
             debug_str += f"[{src_start}:{src_end}]"
+            if distance_between_positions:
+                src_end += distance_between_positions
             last_start = end
-        new_embeddings_k.append(k_pos_emb[last_start:])
-        new_embeddings_q.append(q_pos_emb[last_start:])
-        debug_str += f"[{src_end}:{src_end + len(q_pos_emb) - last_start}]"
+        new_embeddings_k.append(k_pos_emb[last_start:maximum_sequence_end])
+        new_embeddings_q.append(q_pos_emb[last_start:maximum_sequence_end])
+        debug_str += f"[{last_start}:{maximum_sequence_end}]"
         k_pos_emb = torch.cat(new_embeddings_k, dim=0)
         q_pos_emb = torch.cat(new_embeddings_q, dim=0)
         if torch.distributed.get_rank() == 0 and self.layer_number == 3:
@@ -365,6 +385,7 @@ class Attention(MegatronModule, ABC):
         extra_kwargs["dynamic_pattern_id"] = inference_params.other_kwargs["dynamic_pattern_id"]
         extra_kwargs["oracle_mode"] = inference_params.other_kwargs["oracle_mode"]
         extra_kwargs["oracle_positions"] = inference_params.other_kwargs["oracle_positions"]
+        extra_kwargs["distance_between_positions"] = inference_params.other_kwargs["distance_between_positions"]
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference

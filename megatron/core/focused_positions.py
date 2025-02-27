@@ -46,7 +46,7 @@ class FocusedPositions:
         actual_window_size = window_end - window_start
         return rounded_seq_len, window_start, window_end, actual_window_size
 
-    def get_all_positions(self, seq_len, attention_sink=True, granularity=1):
+    def get_all_positions(self, seq_len, attention_sink=True, granularity=1, merge_overlapped_intervals=True):
         rounded_seq_len, window_start, window_end, actual_window_size = self.get_actual_window(seq_len)
         intervals = self.intervals + [[window_start, window_end]]
         if attention_sink:
@@ -62,7 +62,7 @@ class FocusedPositions:
             if len(new_intervals) == 0:
                 new_intervals.append([start, end])
             else:
-                if start <= new_intervals[-1][1]:  # overlapped
+                if merge_overlapped_intervals and start <= new_intervals[-1][1]:  # overlapped
                     # merge into consecutive intervals
                     new_intervals[-1][1] = max(new_intervals[-1][1], end)
                 else:

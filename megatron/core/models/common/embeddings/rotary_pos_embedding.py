@@ -139,6 +139,10 @@ class RotaryEmbedding(nn.Module):
         """
         if inference_params is not None:
             rotary_seq_len = inference_params.max_sequence_length
+            if inference_params.other_kwargs["distance_between_positions"] and inference_params.other_kwargs["oracle_positions"]:
+                rotary_seq_len += ((len(inference_params.other_kwargs["oracle_positions"]) - 1) *
+                                   inference_params.other_kwargs["distance_between_positions"])
+
         else:
             if transformer.input_tensor is not None:
                 rotary_seq_len = transformer.input_tensor.size(0)

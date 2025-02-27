@@ -674,6 +674,9 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
                                                           [self.oracle_size * y, self.oracle_size * (y + 1)]])
 
     def choose_attention_id_from_extra_kwargs(self, extra_kwargs):
+        if extra_kwargs.get("distance_between_positions", 0):
+            # use full attention if there is distance between oracle positions
+            return -1
         oracle_mode = extra_kwargs.get("oracle_mode", "off")
         if oracle_mode != "on":  # dynamic
             pattern_id = extra_kwargs.get("dynamic_pattern_id", None)
