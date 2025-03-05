@@ -1,5 +1,7 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 import datetime
+import os
+
 import torch
 import json
 import threading
@@ -8,7 +10,7 @@ from flask_restful import Resource, Api
 from megatron.training import get_args
 from megatron.inference.text_generation import generate_and_post_process, modify_window_size
 from megatron.inference.text_generation import beam_search_and_post_process
-from megatron.inference.text_generation.tokenization import tokenize_prompts, detokenize_generations, tokenize_prompts_on_one_rank
+from megatron.inference.text_generation.tokenization import detokenize_generations, tokenize_prompts_on_one_rank
 
 
 GENERATE_NUM = 0
@@ -208,6 +210,12 @@ class MegatronGenerate(Resource):
             if not isinstance(distance_between_positions, int):
                 distance_between_positions = 0
 
+
+        attention_save_file = f"attention_save_file/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_")
+        if "attention_save_file" in request_json:
+            attention_save_file += "_" + request_json["attention_save_file"]
+        if not os.path.exists(attention_save_file):
+            os.makedirs(attention_save_file)
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
             
@@ -216,7 +224,7 @@ class MegatronGenerate(Resource):
                 print("All args:", flush=True)
                 for k, v in request_json.items():
                     if k == "prompts":
-                        print(f"{k}: {[v0[:10] + '...' for v0 in v]} ", flush=True)
+                        print(f"{k}: {[str(v0[:10]) + '...' for v0 in v]} ", flush=True)
                     else:
                         print(f"{k}: {v}", flush=True)
                 # print(json.dumps(request_json),flush=True)
@@ -264,7 +272,8 @@ class MegatronGenerate(Resource):
                         return_logits=logprobs,
                         oracle_positions=oracle_positions,
                         oracle_mode=oracle_mode,
-                        distance_between_positions=distance_between_positions
+                        distance_between_positions=distance_between_positions,
+                        attention_save_file=attention_save_file
                     )
                 # print("logits", response_logits)
                 return jsonify({"text": response,

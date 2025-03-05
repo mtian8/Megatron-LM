@@ -19,7 +19,7 @@ class ForwardStep:
     from the outside caller."""
 
     def __init__(self, model, max_batch_size, max_sequence_length, oracle_positions=None, oracle_mode="off",
-        distance_between_positions=0):
+        distance_between_positions=0, attention_save_file=""):
         """Set values so we don't need to do it multiple times."""
         # Make sure model is in eval mode.
         assert not isinstance(model, Iterable), \
@@ -34,6 +34,7 @@ class ForwardStep:
             self.inference_params.other_kwargs["oracle_positions"] = oracle_positions[0]
         self.inference_params.other_kwargs["oracle_mode"] = oracle_mode  # "on", "off" or "debug"
         self.inference_params.other_kwargs["distance_between_positions"] = distance_between_positions
+        self.inference_params.other_kwargs["attention_save_file"] = attention_save_file
         # Pipelining arguments.
         args = get_args()
         self.pipeline_size_larger_than_one = (

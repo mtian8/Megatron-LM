@@ -28,6 +28,7 @@ from megatron.core.utils import divide
 from .enums import AttnMaskType
 from .transformer_config import TransformerConfig
 from ..focused_positions import FocusedPositions
+from ...inference.text_generation.communication import broadcast_int_list
 
 try:
     import transformer_engine
@@ -237,7 +238,7 @@ class Attention(MegatronModule, ABC):
 
         # ######### TEST ####### #
         # ORACLE POSITIONAL EMBEDDING
-        rotary_pos_emb = self._modify_rotary_pos_emb_from_oracle_pattern(key, value, rotary_pos_emb, inference_params)
+        # rotary_pos_emb = self._modify_rotary_pos_emb_from_oracle_pattern(key, value, rotary_pos_emb, inference_params)
 
         q_pos_emb, k_pos_emb = rotary_pos_emb
         q_pos_emb = q_pos_emb[sequence_start:sequence_end, :, :, :]
@@ -272,16 +273,16 @@ class Attention(MegatronModule, ABC):
         # retrieve focused positions
         # ignore oracle mode for distance_between_positions
         distance_between_positions = inference_params.other_kwargs.get("distance_between_positions", 0)
+        oracle_positions = inference_params.other_kwargs.get("oracle_positions", None)
         if distance_between_positions:
-            focused_positions = FocusedPositions(1, inference_params.other_kwargs["oracle_positions"], 0)
+            focused_positions = FocusedPositions(1, oracle_positions, 0)
         else:
             # oracle mode: pattern_id given
             oracle_mode = inference_params.other_kwargs.get("oracle_mode", "off")
 
             if oracle_mode == "on":
-                if not inference_params.other_kwargs.get("oracle_positions", None):
+                if not oracle_positions:
                     return rotary_pos_emb
-                oracle_positions = inference_params.other_kwargs["oracle_positions"]
                 focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
 
             # real-world: infer from extracted_pattern_id
@@ -384,15 +385,85 @@ class Attention(MegatronModule, ABC):
         extra_kwargs["tokens_generated"] = inference_params.other_kwargs["tokens_generated"]
         extra_kwargs["dynamic_pattern_id"] = inference_params.other_kwargs["dynamic_pattern_id"]
         extra_kwargs["oracle_mode"] = inference_params.other_kwargs["oracle_mode"]
-        extra_kwargs["oracle_positions"] = inference_params.other_kwargs["oracle_positions"]
-        extra_kwargs["distance_between_positions"] = inference_params.other_kwargs["distance_between_positions"]
+        extra_kwargs["oracle_positions"] = inference_params.other_kwargs.get("oracle_positions", None)
+        extra_kwargs["distance_between_positions"] = inference_params.other_kwargs.get("distance_between_positions", 0)
+        extra_kwargs["attention_save_file"] = inference_params.other_kwargs.get("attention_save_file", "")
 
+        # for i in range(1):
+        #     # l1 = [1]
+        #     # broadcast_int_list(1, int_list=l1)
+        #     if self.layer_number < 3 and extra_kwargs["tokens_generated"] < 5 and torch.distributed.get_rank() == 0:
+        #         print(f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']}: Hidden={hidden_states.sum()}")
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
         # ===================================================
         key, value, rotary_pos_emb, attn_mask_type = self._adjust_key_value_for_inference(
             inference_params, key, value, rotary_pos_emb
         )
+
+        # !!!!!!!!!!!!!!!!!!!!!! WARNING: EXPERIMENTAL #########################
+        # Modify unpatterned queries, keys, values to space
+
+        if self.layer_number < 3 and torch.distributed.get_rank() == 0 and extra_kwargs['tokens_generated'] < 5:
+            print(
+                f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Pre rope query: {query.max()}\n", end=""
+                )
+            print(
+                f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Pre rope key: { key.max()} \n", end=""
+               )
+            print(
+                f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Pre rope value: {value.max()}\n", end="",
+                )
+
+        if self.layer_number == 1 and extra_kwargs["oracle_mode"] == "on" and extra_kwargs["distance_between_positions"] == 1437:  # magic number!
+            oracle_positions = extra_kwargs["oracle_positions"]
+            oracle_positions = [[start+1, end+1] for start, end in oracle_positions]
+            focused_positions = FocusedPositions(1, oracle_positions, extra_kwargs["tokens_generated"] + 235)
+            intervals = focused_positions.get_all_positions(seq_len=key.size(0), attention_sink=True,  # the first token is 1
+                                                            merge_overlapped_intervals=True)
+            # if torch.distributed.get_rank() == 0:
+            #     print(f"[R {torch.distributed.get_rank()} token {extra_kwargs['tokens_generated']}] EXPERIMENTAL: {intervals}, seq_len: {key.size(0)}, {value.size(0)}, {query.size(0)}\n", end="")
+            previous_end = 0
+            new_queries = []
+            new_keys = []
+            new_values = []
+            for start, end in intervals:
+                new_keys.append(key[1:2].expand(start - previous_end, -1, -1, -1))
+                new_keys.append(key[start:end])
+                new_values.append(value[1:2].expand(start - previous_end, -1, -1, -1))
+                new_values.append(value[start:end])
+                if inference_params.other_kwargs["tokens_generated"] == 0:
+                    new_queries.append(query[1:2].expand(start - previous_end, -1, -1, -1))
+                    new_queries.append(query[start:end])
+                    if previous_end < start:
+                        hidden_states[previous_end:start] = hidden_states[1:2].expand(start - previous_end, -1, -1)  # substitute directly
+                previous_end = end
+
+            if previous_end < key.size(0):
+                new_keys.append(key[previous_end:])
+                new_values.append(value[previous_end:])
+                if inference_params.other_kwargs["tokens_generated"] == 0:
+                    new_queries.append(query[previous_end:])
+            if inference_params.other_kwargs["tokens_generated"] > 0:
+                new_queries.append(query)
+
+
+
+            key = torch.cat(new_keys, dim=0)
+            value = torch.cat(new_values, dim=0)
+            query = torch.cat(new_queries, dim=0)
+            # if torch.distributed.get_rank() == 0:
+            #     print(f"[R {torch.distributed.get_rank()}] ~~~~EXPERIMENTAL: {intervals}, seq_len: {key.size(0)}, {value.size(0)}, {query.size(0)}\n", end="")
+        # !!!!!!!!!!!!!!!!!!!!!! END OF WARNING: EXPERIMENTAL #########################
+
+        # if self.layer_number < 3 and torch.distributed.get_rank() == 0 and extra_kwargs['tokens_generated'] < 5:
+        #     print(f"Layer {self.layer_number} Rank 0 Token {extra_kwargs['tokens_generated']}: {query.size(0)}, {key.size(0)}, {value.size(0)}")
+        #     def print_key(tensor):
+        #         print(f"{tensor[:, 0, 0, :2].reshape(-1).cpu().to(float).numpy().tolist()}\n", end="")
+        #     print_key(key[:8])
+        #     q_start_position = key.size(0) - extra_kwargs["tokens_generated"] - 235
+        #     print_key(key[q_start_position - 8: q_start_position + 8])
+        #     print(f"{q_start_position}.")
 
         if packed_seq_params is not None:
             query = query.squeeze(1)
@@ -427,8 +498,14 @@ class Attention(MegatronModule, ABC):
             )
             debug("q pos emb: ", q_pos_emb[..., :6])
             debug("k pos emb: ", k_pos_emb[..., :6])
-            debug("Post rope query: ", query[..., :6])
-            debug("Post rope key:   ", key[..., :6])
+            for i in range(1):
+                # l1 = [1]
+                # broadcast_int_list(1, int_list=l1)
+                if self.layer_number < 3 and torch.distributed.get_rank() == 0 and extra_kwargs['tokens_generated'] < 5:
+
+                    print(f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Post rope query:  {query.max()}\n", end="")
+                    print(f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Post rope key:  {key.max()}\n", end="")
+                    print(f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Post rope value:  {value.max()}\n", end="")
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
@@ -474,8 +551,12 @@ class Attention(MegatronModule, ABC):
         # =================
         # Output. [sq, b, h]
         # =================
-
+        # if self.layer_number < 3 and torch.distributed.get_rank() == 0 and extra_kwargs['tokens_generated'] < 5:
+        #     print(
+        #         f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Attn Out: ",
+        #         core_attn_out.sum())
         output, bias = self.linear_proj(core_attn_out)
+
         debug("Linear proj Output: ", output[..., :6])
         return output, bias
 

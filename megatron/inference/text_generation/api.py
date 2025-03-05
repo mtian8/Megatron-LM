@@ -37,7 +37,8 @@ def generate_and_post_process(model,
                               ignore_special_tokens=False,
                               oracle_positions=None,
                               oracle_mode="off",
-                              distance_between_positions=0
+                              distance_between_positions=0,
+                                attention_save_file=""
                               ):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
@@ -62,7 +63,8 @@ def generate_and_post_process(model,
         random_seed=random_seed,
         oracle_positions=oracle_positions,
         oracle_mode=oracle_mode,
-        distance_between_positions=distance_between_positions
+        distance_between_positions=distance_between_positions,
+        attention_save_file=attention_save_file
     )
 
     # Only post-process on first stage.
@@ -104,7 +106,8 @@ def generate(model,
              random_seed=-1,
              oracle_positions=None,
              oracle_mode="off",
-             distance_between_positions=0
+             distance_between_positions=0,
+             attention_save_file="",
              ):
     """Given prompts and input parameters, run inference and return:
        tokens: prompts plus the generated tokens.
@@ -163,8 +166,11 @@ def generate(model,
     else:
         oracle_mode = "on"
 
-
     print(f"[Rank {torch.distributed.get_rank()}] oracle_positions: {oracle_positions}")
+
+    string_list = [attention_save_file]
+    torch.distributed.broadcast_object_list(string_list, 0)
+    attention_save_file = string_list[0]
 
     if random_seed != -1:
         torch.random.manual_seed(random_seed)
@@ -174,8 +180,9 @@ def generate(model,
     if torch.distributed.get_rank() == 0:
         assert prompts is not None
 
+
     context_tokens_tensor, context_length_tensor = tokenize_prompts(
-        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS)
+        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS, add_space=True)
 
     if tokens_to_generate == 0:
         return score_and_return_on_first_stage(
@@ -197,7 +204,8 @@ def generate(model,
         prevent_newline_after_colon=prevent_newline_after_colon,
         oracle_positions=oracle_positions,
         oracle_mode=oracle_mode,
-        distance_between_positions=distance_between_positions
+        distance_between_positions=distance_between_positions,
+        attention_save_file=attention_save_file
     )
 
 def beam_search_and_post_process(model,

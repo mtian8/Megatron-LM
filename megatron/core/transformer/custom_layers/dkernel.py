@@ -891,6 +891,13 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
             # *,
             **packed_seq_params
         )
+        prob_position = prob[0, :, (q_len - 1) % prob.shape[2], :kv_len]  # [heads_per_gpu, sequence_length]
+        if extra_kwargs.get("attention_save_file") and self.layer_number <= 2 and extra_kwargs.get("tokens_generated", 0) < 10:
+            filename = os.path.join(extra_kwargs["attention_save_file"], f"layer_{self.layer_number}_rank_{tp_rank}_token_{extra_kwargs['tokens_generated']}.out")
+            prob_list = prob_position.detach().cpu().tolist()
+            with open(filename, "w") as f:
+                import json
+                json.dump(prob_list, f)
 
         rounded_kv_len = 16384  # the smallest visual len from 16384
         while rounded_kv_len < kv_len:
@@ -899,7 +906,7 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
         visual_block_size = rounded_kv_len // visual_block_count
 
         # compare prob with pattern
-        if self.layer_number == 1 and len(extra_kwargs["dynamic_pattern_id"]) == 0:  # at layer 2
+        if self.layer_number == 2 and len(extra_kwargs["dynamic_pattern_id"]) == 0:  # at layer 2
             extracted_pattern_id_global, _, prob_target, _, _ = self.extract_pattern_from_prob(
                 q_len, kv_len, prob, granularity=visual_block_size, head_reduction="none")
             values_int_tensor = [-1, -1, -1, -1]
@@ -910,11 +917,11 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
             scores = {}
             for i in range(4):
                 scores[values_int_tensor[i]] = scores.get(values_int_tensor[i], 0) + 1
-            extracted_pattern_id_global = -1
-            for pattern in scores:
-                if scores[pattern] >= 2:
-                    extracted_pattern_id_global = pattern
-                    break
+            # extracted_pattern_id_global = -1
+            # for pattern in scores:
+            #     if scores[pattern] >= 2:
+            #         extracted_pattern_id_global = pattern
+            #         break
 
             def get_visual_prob(contents_to_print, pattern_id):
                 # calculate the maximum prob for each head
@@ -952,9 +959,12 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
 
                 visual_prob = ''.join(probs_to_digits2)
                 return visual_prob
-            # visual_prob = get_visual_prob(prob_target[0], extracted_pattern_id_global)
-            # print_string = f"[Rank {tp_rank}] {visual_prob} {extracted_pattern_id_global}"
-            # print(print_string)
+            visual_prob = get_visual_prob(prob_target[0], extracted_pattern_id_global)
+            for i in range(4):
+                broadcast_int_list(1, int_list=values_int_tensor[i:i+1], rank=i)
+                if tp_rank == i:
+                    print_string = f"[Rank {tp_rank}] {visual_prob} {extracted_pattern_id_global}"
+                    print(print_string)
 
             if isinstance(extra_kwargs.get("dynamic_pattern_id", None), list):
                 if len(extra_kwargs["dynamic_pattern_id"]) == 0:

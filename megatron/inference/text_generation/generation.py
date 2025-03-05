@@ -101,7 +101,8 @@ def generate_tokens_probs_and_return_on_first_stage(
         prevent_newline_after_colon=True,
         oracle_positions=None,
         oracle_mode="off",
-        distance_between_positions=0
+        distance_between_positions=0,
+        attention_save_file=""
         ):
     """Main token generation function.
 
@@ -159,7 +160,7 @@ def generate_tokens_probs_and_return_on_first_stage(
 
     # forward step.
     forward_step = forward_step(model, batch_size, max_sequence_length, oracle_positions, oracle_mode=oracle_mode,
-        distance_between_positions=distance_between_positions)
+        distance_between_positions=distance_between_positions, attention_save_file=attention_save_file)
 
     # Added termination_id to support the case that we want to terminate the
     # generation once that id is generated.

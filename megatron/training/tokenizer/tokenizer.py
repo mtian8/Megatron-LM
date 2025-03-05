@@ -141,13 +141,16 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
     def tokenize(self, text):
         return self._tokenizer(text).input_ids
 
+    def tokenize_without_special_tokens(self, text):
+        return self._tokenizer(text, add_special_tokens=False).input_ids
+
     def pure_tokenize(self, text):
         """
         Remove special tokens and leading spaces from the tokenized text.
         """
         input_ids = self._tokenizer(text, add_special_tokens=False).input_ids
         leading_space_token_id = self._tokenizer.convert_tokens_to_ids("▁")
-        while input_ids[0] == leading_space_token_id:
+        while len(input_ids) and input_ids[0] == leading_space_token_id:
             input_ids = input_ids[1:]
         return input_ids
 
