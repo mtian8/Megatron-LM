@@ -238,7 +238,7 @@ class Attention(MegatronModule, ABC):
 
         # ######### TEST ####### #
         # ORACLE POSITIONAL EMBEDDING
-        # rotary_pos_emb = self._modify_rotary_pos_emb_from_oracle_pattern(key, value, rotary_pos_emb, inference_params)
+        rotary_pos_emb = self._modify_rotary_pos_emb_from_oracle_pattern(key, value, rotary_pos_emb, inference_params)
 
         q_pos_emb, k_pos_emb = rotary_pos_emb
         q_pos_emb = q_pos_emb[sequence_start:sequence_end, :, :, :]
@@ -274,18 +274,19 @@ class Attention(MegatronModule, ABC):
         # ignore oracle mode for distance_between_positions
         distance_between_positions = inference_params.other_kwargs.get("distance_between_positions", 0)
         oracle_positions = inference_params.other_kwargs.get("oracle_positions", None)
-        if distance_between_positions:
+        pattern_mode = inference_params.other_kwargs.get("pattern_mode", "off")
+
+        if distance_between_positions:  # if distance is given, then ignore pattern mode, as if it were "off"
             focused_positions = FocusedPositions(1, oracle_positions, 0)
         else:
-            # oracle mode: pattern_id given
-            oracle_mode = inference_params.other_kwargs.get("oracle_mode", "off")
-
-            if oracle_mode == "on":
+            if pattern_mode == "off":  # no pattern and no distance, no modification
+                return rotary_pos_emb
+            if pattern_mode == "oracle":   # oracle mode: pattern_id given
                 if not oracle_positions:
                     return rotary_pos_emb
                 focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
 
-            # real-world: infer from extracted_pattern_id
+            # pattern_mode == dynamic: infer from extracted_pattern_id
             else:
                 if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
                     return rotary_pos_emb
@@ -384,7 +385,7 @@ class Attention(MegatronModule, ABC):
                 inference_params.other_kwargs["tokens_generated"] += key.size(0)
         extra_kwargs["tokens_generated"] = inference_params.other_kwargs["tokens_generated"]
         extra_kwargs["dynamic_pattern_id"] = inference_params.other_kwargs["dynamic_pattern_id"]
-        extra_kwargs["oracle_mode"] = inference_params.other_kwargs["oracle_mode"]
+        extra_kwargs["pattern_mode"] = inference_params.other_kwargs["pattern_mode"]
         extra_kwargs["oracle_positions"] = inference_params.other_kwargs.get("oracle_positions", None)
         extra_kwargs["distance_between_positions"] = inference_params.other_kwargs.get("distance_between_positions", 0)
         extra_kwargs["attention_save_file"] = inference_params.other_kwargs.get("attention_save_file", "")
@@ -415,7 +416,7 @@ class Attention(MegatronModule, ABC):
                 f"Layer {self.layer_number} Rank {torch.distributed.get_rank()} Token {extra_kwargs['tokens_generated']} Pre rope value: {value.max()}\n", end="",
                 )
 
-        if self.layer_number == 1 and extra_kwargs["oracle_mode"] == "on" and extra_kwargs["distance_between_positions"] == 1437:  # magic number!
+        if self.layer_number == 1 and extra_kwargs["pattern_mode"] == "oracle" and extra_kwargs["distance_between_positions"] == 1437:  # magic number!
             oracle_positions = extra_kwargs["oracle_positions"]
             oracle_positions = [[start+1, end+1] for start, end in oracle_positions]
             focused_positions = FocusedPositions(1, oracle_positions, extra_kwargs["tokens_generated"] + 235)

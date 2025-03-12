@@ -18,7 +18,7 @@ class ForwardStep:
     We use a class here to hide the inference parameters
     from the outside caller."""
 
-    def __init__(self, model, max_batch_size, max_sequence_length, oracle_positions=None, oracle_mode="off",
+    def __init__(self, model, max_batch_size, max_sequence_length, oracle_positions=None, pattern_mode="off",
         distance_between_positions=0, attention_save_file=""):
         """Set values so we don't need to do it multiple times."""
         # Make sure model is in eval mode.
@@ -32,7 +32,7 @@ class ForwardStep:
         if oracle_positions:
             # only support batch size 1; [num_oracle_positions, 2]
             self.inference_params.other_kwargs["oracle_positions"] = oracle_positions[0]
-        self.inference_params.other_kwargs["oracle_mode"] = oracle_mode  # "on", "off" or "debug"
+        self.inference_params.other_kwargs["pattern_mode"] = pattern_mode
         self.inference_params.other_kwargs["distance_between_positions"] = distance_between_positions
         self.inference_params.other_kwargs["attention_save_file"] = attention_save_file
         # Pipelining arguments.

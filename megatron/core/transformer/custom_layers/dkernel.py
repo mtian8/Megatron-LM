@@ -677,14 +677,16 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
         if extra_kwargs.get("distance_between_positions", 0):
             # use full attention if there is distance between oracle positions
             return -1
-        oracle_mode = extra_kwargs.get("oracle_mode", "off")
-        if oracle_mode != "on":  # dynamic
+        pattern_mode = extra_kwargs.get("pattern_mode", "off")
+        if pattern_mode == "off":
+            return -1
+        if pattern_mode == "dynamic":  # dynamic
             pattern_id = extra_kwargs.get("dynamic_pattern_id", None)
             if isinstance(pattern_id, list) and len(pattern_id) > 0:
                 return pattern_id[0]
             else:
                 return -1
-        else:  # from oracle
+        elif pattern_mode == "oracle":  # from oracle
             oracle_positions = extra_kwargs.get("oracle_positions", None)
             block_size = self.oracle_size
             if oracle_positions is None:
@@ -892,7 +894,7 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
             **packed_seq_params
         )
         prob_position = prob[0, :, (q_len - 1) % prob.shape[2], :kv_len]  # [heads_per_gpu, sequence_length]
-        if extra_kwargs.get("attention_save_file") and self.layer_number <= 2 and extra_kwargs.get("tokens_generated", 0) < 10:
+        if extra_kwargs.get("attention_save_file") and extra_kwargs.get("attention_save_file").find("discard") == -1 and self.layer_number <= 8 and extra_kwargs.get("tokens_generated", 0) < 10:
             filename = os.path.join(extra_kwargs["attention_save_file"], f"layer_{self.layer_number}_rank_{tp_rank}_token_{extra_kwargs['tokens_generated']}.out")
             prob_list = prob_position.detach().cpu().tolist()
             with open(filename, "w") as f:

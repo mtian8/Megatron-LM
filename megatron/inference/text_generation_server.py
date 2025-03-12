@@ -198,11 +198,11 @@ class MegatronGenerate(Resource):
             if not isinstance(oracle_positions, list):
                 oracle_positions = None
 
-        oracle_mode = "off"
-        if "oracle_mode" in request_json:
-            oracle_mode = request_json["oracle_mode"]
-            if oracle_mode not in ["on", "off", "debug"]:
-                oracle_mode = "debug"
+        pattern_mode = "off"
+        if "pattern_mode" in request_json:
+            pattern_mode = request_json["pattern_mode"]
+            # if pattern_mode not in ["oracle", "off", "dynamic"]:
+            #     pattern_mode = "off"
 
         distance_between_positions = 0
         if "distance_between_positions" in request_json:
@@ -214,7 +214,7 @@ class MegatronGenerate(Resource):
         attention_save_file = f"attention_save_file/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_")
         if "attention_save_file" in request_json:
             attention_save_file += "_" + request_json["attention_save_file"]
-        if not os.path.exists(attention_save_file):
+        if not os.path.exists(attention_save_file) and attention_save_file.find("discard") == -1:
             os.makedirs(attention_save_file)
         
         with lock:  # Need to get lock to keep multiple threads from hitting code
@@ -271,7 +271,7 @@ class MegatronGenerate(Resource):
                         ignore_special_tokens=ignore_special_tokens,
                         return_logits=logprobs,
                         oracle_positions=oracle_positions,
-                        oracle_mode=oracle_mode,
+                        pattern_mode=pattern_mode,
                         distance_between_positions=distance_between_positions,
                         attention_save_file=attention_save_file
                     )

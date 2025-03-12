@@ -100,7 +100,7 @@ def generate_tokens_probs_and_return_on_first_stage(
         stop_on_eol=False,
         prevent_newline_after_colon=True,
         oracle_positions=None,
-        oracle_mode="off",
+        pattern_mode="off",
         distance_between_positions=0,
         attention_save_file=""
         ):
@@ -159,7 +159,7 @@ def generate_tokens_probs_and_return_on_first_stage(
         raise ValueError("Too many tokens.  " + str(max_sequence_length*batch_size)+ " is greater than "+str(args.max_tokens_to_oom))
 
     # forward step.
-    forward_step = forward_step(model, batch_size, max_sequence_length, oracle_positions, oracle_mode=oracle_mode,
+    forward_step = forward_step(model, batch_size, max_sequence_length, oracle_positions, pattern_mode=pattern_mode,
         distance_between_positions=distance_between_positions, attention_save_file=attention_save_file)
 
     # Added termination_id to support the case that we want to terminate the

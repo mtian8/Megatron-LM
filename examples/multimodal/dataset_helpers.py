@@ -409,14 +409,14 @@ class TaskEncoder(DefaultTaskEncoder[OCRSample, OCRSample, ImageTaskBatch, dict]
 
         question = sample.context
 
-        if isinstance(sample.answers, list):
-            answer_list = sample.answers
+        if isinstance(sample.answers_number, list):
+            answer_list = sample.answers_number
             weight_list = np.array(sample.answer_weights).astype(np.float32)
             weight_list = weight_list / np.sum(weight_list)
             answer_idx = np.random.choice(weight_list.shape[0], 1, p=weight_list)[0]
             answer = answer_list[answer_idx]
         else:
-            answer = sample.answers
+            answer = sample.answers_number
 
         question_token = self.tokenizer.tokenizer.instruct_tokenize(question)
         answer_token = self.tokenizer(answer)

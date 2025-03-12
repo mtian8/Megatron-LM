@@ -63,7 +63,8 @@ def detokenize_generations(tokens_gpu_tensor,
 
 
 def tokenize_prompts(prompts=None, tokens_to_generate=None,
-                     add_BOS=None, rank=0, ignore_special_tokens=False, add_space=False):
+                     add_BOS=None, rank=0, add_space=False,
+                     check_format=False):
     """Tokenize prompts and make them avaiable on all ranks."""
 
     # On all ranks set to None so we can pass them to functions
@@ -77,7 +78,8 @@ def tokenize_prompts(prompts=None, tokens_to_generate=None,
         assert tokens_to_generate is not None
         # Tensor of tokens padded and their unpadded length.
         prompts_tokens_cuda_long_tensor, prompts_length_cuda_long_tensor = \
-            _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_special_tokens, add_space)
+            _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, False, add_space,
+                                        check_format=check_format)
         # We need the sizes of these tensors for the boradcast
         sizes_list = [prompts_tokens_cuda_long_tensor.size(0), # Batch size
                       prompts_tokens_cuda_long_tensor.size(1)] # Sequence lenght
@@ -136,7 +138,8 @@ def tokenize_prompts_on_one_rank(prompts=None, tokens_to_generate=None,
     return prompts_tokens_cuda_long_tensor, prompts_length_cuda_long_tensor
 
 
-def _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_special_tokens=False, add_space=False):
+def _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_special_tokens=False, add_space=False,
+                                check_format=False):
     """Given a set of prompts and number of tokens to generate:
         - tokenize prompts
         - set the sequence length to be the max of length of prompts
@@ -155,12 +158,14 @@ def _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_spe
         eod_token = tokenizer.eod_id
     else:
         raise AttributeError('No eod token found in Tokenizer')
+    if hasattr(tokenizer, 'bos'):
+        bos_token = tokenizer.bos
+    elif hasattr(tokenizer, 'bos_id'):
+        bos_token = tokenizer.bos_id
+    else:
+        bos_token = None
     if add_BOS:
-        if hasattr(tokenizer, 'bos'):
-            bos_token = tokenizer.bos
-        elif hasattr(tokenizer, 'bos_id'):
-            bos_token = tokenizer.bos_id
-        else:
+        if bos_token is None:
             raise AttributeError('No bos token found in Tokenizer')
         # print("Adding BOS")
 
@@ -168,12 +173,25 @@ def _tokenize_prompts_and_batch(prompts, tokens_to_generate, add_BOS, ignore_spe
                           for prompt in prompts]
     else:
         prompts_tokens = [(tokenizer.tokenize(prompt) if isinstance(prompt, str) else prompt) for prompt in prompts]
-    if add_space:
-        prompts_tokens = [prompt_tokens[0:1] + tokenizer.tokenize_without_special_tokens(" ") + prompt_tokens[1:] for prompt_tokens in prompts_tokens]  # add a space
+    # deal with repetitive bos tokens
+    prompts_tokens = [[token for (i, token) in enumerate(tokens) if token != bos_token or i == 0 or token != tokens[i - 1]
+                       ] for tokens in prompts_tokens]
+    # if add_space:
+    #     prompts_tokens = [prompt_tokens[0:1] + tokenizer.tokenize_without_special_tokens(" ") + prompt_tokens[1:] for prompt_tokens in prompts_tokens]  # add a space
 
     if ignore_special_tokens and args.tokenizer_type == "HuggingFaceTokenizer":
+        print("ignore_special_tokens")
         prompts_tokens = [[token for token in prompt_tokens if token not in tokenizer.special_token_id_list]
                           for prompt_tokens in prompts_tokens]
+
+    print("Tokens:", prompts_tokens[0][:5000])
+
+    if check_format:
+        assert prompts_tokens[0][0] == bos_token, "First token is not BOS"
+        assert eod_token not in prompts_tokens[0], "EOD should not exist"
+        assert bos_token not in prompts_tokens[0][1:], "BOS should not exist"
+
+
         # print("Did not add BOS; first token is", prompts_tokens[0][0], "; tokenizer.eod is", eod_token)
         # for special_token in ["cls", "sep", "pad", "eod", "bos", "eos", "mask"]:
             # try:

@@ -36,7 +36,7 @@ def generate_and_post_process(model,
                               return_logits=False,
                               ignore_special_tokens=False,
                               oracle_positions=None,
-                              oracle_mode="off",
+                              pattern_mode="off",
                               distance_between_positions=0,
                                 attention_save_file=""
                               ):
@@ -62,7 +62,7 @@ def generate_and_post_process(model,
         prevent_newline_after_colon=prevent_newline_after_colon,
         random_seed=random_seed,
         oracle_positions=oracle_positions,
-        oracle_mode=oracle_mode,
+        pattern_mode=pattern_mode,
         distance_between_positions=distance_between_positions,
         attention_save_file=attention_save_file
     )
@@ -105,7 +105,7 @@ def generate(model,
              prevent_newline_after_colon=False,
              random_seed=-1,
              oracle_positions=None,
-             oracle_mode="off",
+             pattern_mode="off",
              distance_between_positions=0,
              attention_save_file="",
              ):
@@ -156,15 +156,15 @@ def generate(model,
         oracle_positions = None
 
     values_int_tensor[0] = distance_between_positions
-    values_int_tensor[1] = 0 if oracle_mode == "off" else (1 if oracle_mode == "debug" else 2)
+    pattern_mode_mapping = ["oracle", "dynamic", "off", "unknown"]
+    if pattern_mode not in pattern_mode_mapping:
+        pattern_mode_index = -1  # unknown
+    else:
+        pattern_mode_index = pattern_mode_mapping.index(str(pattern_mode))
+    values_int_tensor[1] = pattern_mode_index
     values_int_tensor = broadcast_int_list(2, int_list=values_int_tensor[:2])
     distance_between_positions = values_int_tensor[0]
-    if values_int_tensor[1] == 0:
-        oracle_mode = "off"
-    elif values_int_tensor[1] == 1:
-        oracle_mode = "debug"
-    else:
-        oracle_mode = "on"
+    pattern_mode = pattern_mode_mapping[pattern_mode_index]
 
     print(f"[Rank {torch.distributed.get_rank()}] oracle_positions: {oracle_positions}")
 
@@ -182,7 +182,8 @@ def generate(model,
 
 
     context_tokens_tensor, context_length_tensor = tokenize_prompts(
-        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS, add_space=True)
+        prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS, add_space=True,
+        check_format=True)
 
     if tokens_to_generate == 0:
         return score_and_return_on_first_stage(
@@ -203,7 +204,7 @@ def generate(model,
         stop_on_eol=stop_on_eol,
         prevent_newline_after_colon=prevent_newline_after_colon,
         oracle_positions=oracle_positions,
-        oracle_mode=oracle_mode,
+        pattern_mode=pattern_mode,
         distance_between_positions=distance_between_positions,
         attention_save_file=attention_save_file
     )
