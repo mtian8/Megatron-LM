@@ -372,6 +372,7 @@ class Attention(MegatronModule, ABC):
         # =====================
         # Get the query, key and value tensors based on the type of attention -
         # self or cross attn.
+
         query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
 
         extra_kwargs = {}

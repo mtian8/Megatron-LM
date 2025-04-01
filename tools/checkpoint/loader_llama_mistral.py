@@ -118,20 +118,23 @@ def convert_to_hf(model_path, input_base_path, model_size, tokenizer_path):
         tokenizer_class = LlamaTokenizer if LlamaTokenizerFast is None else LlamaTokenizerFast
     elif "llama3" in model_size:
         try:
-            from llama.tokenizer import Tokenizer as Llama3Tokenizer
+            from transformers import AutoTokenizer
+            # from llama.tokenizer import Tokenizer as Llama3Tokenizer
         except ImportError:
             raise AssertionError("Module 'llama' is required but not installed.")
-        tokenizer_class = Llama3Tokenizer
+        tokenizer_class = AutoTokenizer.from_pretrained
     elif "mistral" in model_size:
         tokenizer_class = MistralTokenizer
     else:
         raise AttributeError(f"model_size={model_size} not supported")
     if tokenizer_path is not None:
         if "llama" in model_size:
+
             tokenizer = tokenizer_class(tokenizer_path)
             if "llama2" in model_size:
                 tokenizer.save_pretrained(model_path)
             vocab_size = tokenizer.vocab_size if tokenizer_path is not None else 32000
+            print("Vocab size: ", vocab_size)
         elif "mistral" in model_size:
             tokenizer = tokenizer_class.from_file(tokenizer_path)
             vocab_size = 32768
@@ -557,14 +560,16 @@ def _load_checkpoint(queue, args):
     # Get true (non-padded) vocab size
     if margs.tokenizer_model is not None and "llama3" in args.model_size:
         try:
-            from llama.tokenizer import Tokenizer as Llama3Tokenizer
+            from transformers import AutoTokenizer
         except ImportError:
             raise AssertionError("Module 'llama' is required but not installed.")
-        tokenizer = Llama3Tokenizer(margs.tokenizer_model)
-        # md.true_vocab_size = tokenizer.vocab_size
-        md.true_vocab_size = tokenizer.n_words
+        tokenizer = AutoTokenizer.from_pretrained(margs.tokenizer_model)
+        md.true_vocab_size = tokenizer.__len__()
+        # md.true_vocab_size = tokenizer.n_words
     else:
         md.true_vocab_size = None
+
+    print("MD TRUE VOCAB SIZE", md.true_vocab_size)
 
     # Get first pipe stage.
     mpu.set_tensor_model_parallel_rank(0)

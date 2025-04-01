@@ -38,7 +38,7 @@ def generate_and_post_process(model,
                               oracle_positions=None,
                               pattern_mode="off",
                               distance_between_positions=0,
-                                attention_save_file=""
+                                # attention_save_file=""
                               ):
     """Run inference and post-process outputs, i.e., detokenize,
     move to cpu and convert to list."""
@@ -64,7 +64,7 @@ def generate_and_post_process(model,
         oracle_positions=oracle_positions,
         pattern_mode=pattern_mode,
         distance_between_positions=distance_between_positions,
-        attention_save_file=attention_save_file
+        # attention_save_file=attention_save_file
     )
 
     # Only post-process on first stage.

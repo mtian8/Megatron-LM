@@ -36,6 +36,7 @@ class MegatronGenerate(Resource):
         torch.distributed.broadcast(choice, 0)
     
     def put(self):
+
         return self.put_inner(request.get_json())
 
     def put_inner(self, request_json):
@@ -211,25 +212,25 @@ class MegatronGenerate(Resource):
                 distance_between_positions = 0
 
 
-        attention_save_file = f"attention_save_file/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_")
-        if "attention_save_file" in request_json:
-            attention_save_file += "_" + request_json["attention_save_file"]
-        if not os.path.exists(attention_save_file) and attention_save_file.find("discard") == -1:
-            os.makedirs(attention_save_file)
+        # attention_save_file = f"attention_save_file/{datetime.datetime.now()}".replace(" ", "_").replace(":", "_")
+        # if "attention_save_file" in request_json:
+        #     attention_save_file += "_" + request_json["attention_save_file"]
+        # if not os.path.exists(attention_save_file) and attention_save_file.find("discard") == -1:
+        #     os.makedirs(attention_save_file)
         
-        with lock:  # Need to get lock to keep multiple threads from hitting code
-            
-            if not no_log:
-                print("request IP: " + str(request.remote_addr))
-                print("All args:", flush=True)
-                for k, v in request_json.items():
-                    if k == "prompts":
-                        print(f"{k}: {[str(v0[:10]) + '...' for v0 in v]} ", flush=True)
-                    else:
-                        print(f"{k}: {v}", flush=True)
-                # print(json.dumps(request_json),flush=True)
-                print("start time: ", datetime.datetime.now())
 
+            
+        if not no_log:
+            print("request IP: " + str(request.remote_addr))
+            print("All args:", flush=True)
+            for k, v in request_json.items():
+                if k == "prompts":
+                    print(f"{k}: {[str(v0[:10]) + '...' for v0 in v]} ", flush=True)
+                else:
+                    print(f"{k}: {v}", flush=True)
+            # print(json.dumps(request_json),flush=True)
+            print("start time: ", datetime.datetime.now())
+        with lock:  # Need to get lock to keep multiple threads from hitting code
             if beam_width is not None:
                 self.send_do_beam_search()  # Tell other ranks we're doing beam_search
                 response, response_seg, response_scores = \
@@ -273,7 +274,7 @@ class MegatronGenerate(Resource):
                         oracle_positions=oracle_positions,
                         pattern_mode=pattern_mode,
                         distance_between_positions=distance_between_positions,
-                        attention_save_file=attention_save_file
+                        # attention_save_file=attention_save_file
                     )
                 # print("logits", response_logits)
                 return jsonify({"text": response,
@@ -282,7 +283,6 @@ class MegatronGenerate(Resource):
                             "logits": response_logits})
 
 
-            print("end time: ", datetime.datetime.now())
 
 
 class MegatronTokenize(Resource):
@@ -341,13 +341,15 @@ class MegatronTokenize(Resource):
                 return "ignore_special_tokens must be a boolean value"
 
 
-        with lock:  # Need to get lock to keep multiple threads from hitting code
-            # self.send_do_tokenize()
-            if not no_log:
-                print("request IP: " + str(request.remote_addr))
-                # print(json.dumps(request.get_json()), flush=True)
-                print("start time: ", datetime.datetime.now())
 
+        # self.send_do_tokenize()
+        if not no_log:
+            print("request IP: " + str(request.remote_addr))
+            # print(json.dumps(request.get_json()), flush=True)
+            print("start time: ", datetime.datetime.now())
+
+
+        with lock:  # Need to get lock to keep multiple threads from hitting code
             try:
                 prompts_tokens_tensor, _ = tokenize_prompts_on_one_rank(
                     prompts=texts,
@@ -482,7 +484,20 @@ class MegatronModifyWindowSize(Resource):
             print("end time: ", datetime.datetime.now())
 
 
+class MegatronInfo(Resource):
+    def __init__(self, model, port):
+        self.model = model
+        self.world_size = torch.distributed.get_world_size()
+        self.port = port
+        print({"world_size": self.world_size, "port": self.port})
 
+    def put(self):
+        # no lock
+        print("args", get_args())
+        print(get_args().load, get_args().tokenizer_model, )
+        return jsonify({"world_size": self.world_size, "port": self.port, "in_use": lock.locked(),
+                        "load": get_args().load, "tokenizer_model": get_args().tokenizer_model,
+                        "rotary_base": get_args().rotary_base})
 
 
 class MegatronServer(object):
@@ -493,6 +508,9 @@ class MegatronServer(object):
         api.add_resource(MegatronTokenize, '/api/tokenize', resource_class_args=[model])
         api.add_resource(MegatronDetokenize, '/api/detokenize', resource_class_args=[model])
         api.add_resource(MegatronModifyWindowSize, '/api/modify_window_size', resource_class_args=[model])
+        self.api = api
+        self.model = model
         
-    def run(self, url, port): 
+    def run(self, url, port):
+        self.api.add_resource(MegatronInfo, '/api/info', resource_class_args=[self.model, port])
         self.app.run(url, threaded=True, debug=False, port=port)

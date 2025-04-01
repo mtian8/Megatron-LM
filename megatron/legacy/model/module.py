@@ -1,6 +1,7 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
 """Megatron Module"""
+import math
 
 import torch
 from torch.autograd import Variable
@@ -187,7 +188,7 @@ class Float16Module(MegatronModule):
         if mpu.is_pipeline_first_stage():
             inputs = fp32_to_float16(inputs, self.float16_convertor)
         outputs = self.module(*inputs, **kwargs)
-        if mpu.is_pipeline_last_stage():
+        if mpu.is_pipeline_last_stage() and math.prod(outputs.shape) < 1000000:
             outputs = float16_to_fp32(outputs)
         return outputs
 

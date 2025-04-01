@@ -55,6 +55,7 @@ class GPTModel(LanguageModule):
         rotary_percent: float = 1.0,
         rotary_base: int = 10000,
         seq_len_interpolation_factor: Optional[float] = None,
+        **kwargs
     ) -> None:
         super().__init__(config=config)
 
@@ -90,6 +91,7 @@ class GPTModel(LanguageModule):
             )
 
         if self.position_embedding_type == 'rope':
+            llama3_rope_scaling_kwargs = kwargs.get("rope_scaling")
             self.rotary_pos_emb = RotaryEmbedding(
                 kv_channels=self.config.kv_channels,
                 rotary_percent=rotary_percent,
@@ -97,6 +99,7 @@ class GPTModel(LanguageModule):
                 seq_len_interpolation_factor=seq_len_interpolation_factor,
                 rotary_base=rotary_base,
                 use_cpu_initialization=self.config.use_cpu_initialization,
+                llama3_rope_scaling_kwargs=llama3_rope_scaling_kwargs
             )
 
         # Transformer.
@@ -216,7 +219,10 @@ class GPTModel(LanguageModule):
         output_weight = None
         if self.share_embeddings_and_output_weights:
             output_weight = self.shared_embedding_or_output_weight()
+        if labels is None:
+            hidden_states = hidden_states[-1:]
         logits, _ = self.output_layer(hidden_states, weight=output_weight)
+
 
         if has_config_logger_enabled(self.config):
             payload = OrderedDict(
@@ -232,7 +238,7 @@ class GPTModel(LanguageModule):
 
         if labels is None:
             # [s b h] => [b s h]
-            return logits.transpose(0, 1).contiguous()
+            return logits.transpose(0, 1).contiguous()[:, -1:, :]
         # print(labels.shape, logits.shape)
         loss = self.compute_language_model_loss(labels, logits)
 

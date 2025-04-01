@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -64,6 +65,7 @@ class RotaryEmbedding(nn.Module):
         seq_len_interpolation_factor: float = None,
         rotary_base: int = 10000,
         use_cpu_initialization: bool = False,
+        llama3_rope_scaling_kwargs: Optional[dict] = None,
     ) -> None:
         super().__init__()
 
@@ -77,6 +79,25 @@ class RotaryEmbedding(nn.Module):
         self.inv_freq = 1.0 / (
             rotary_base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim)
         )
+
+        if llama3_rope_scaling_kwargs is not None:
+            # https://github.com/huggingface/transformers/blob/0b057e66b52556da3a1cbc29e2a98c0784ea9c33/src/transformers/modeling_rope_utils.py#L305
+            factor = llama3_rope_scaling_kwargs['factor']
+            low_freq_factor = llama3_rope_scaling_kwargs["low_freq_factor"]
+            high_freq_factor = llama3_rope_scaling_kwargs["high_freq_factor"]
+            old_context_len = llama3_rope_scaling_kwargs["original_max_position_embeddings"]
+
+            low_freq_wavelen = old_context_len / low_freq_factor
+            high_freq_wavelen = old_context_len / high_freq_factor
+
+            wavelen = 2 * math.pi / self.inv_freq
+            inv_freq_llama = torch.where(wavelen > low_freq_wavelen, self.inv_freq / factor, self.inv_freq)
+            smooth_factor = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            smoothed_inv_freq = (1 - smooth_factor) * inv_freq_llama / factor + smooth_factor * inv_freq_llama
+            is_medium_freq = ~(wavelen < high_freq_wavelen) * ~(wavelen > low_freq_wavelen)
+            self.inv_freq = torch.where(is_medium_freq, smoothed_inv_freq, inv_freq_llama)
+
+
 
     def forward(self, max_seq_len: int, offset: int = 0) -> Tensor:
         """Forward pass of RoPE embedding.
