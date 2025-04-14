@@ -708,6 +708,8 @@ class DKernelPredefinedSparseAttention(torch.nn.Module):
                     return block_start // block_size
                 else:
                     return block_start // block_size + self.num_oracles
+        else:  # any other
+            return -1
 
     def choose_attention_from_extra_kwargs(self, extra_kwargs):
         attention_id = self.choose_attention_id_from_extra_kwargs(extra_kwargs)

@@ -281,13 +281,13 @@ class Attention(MegatronModule, ABC):
         else:
             if pattern_mode == "off":  # no pattern and no distance, no modification
                 return rotary_pos_emb
-            if pattern_mode == "oracle":   # oracle mode: pattern_id given
+            elif pattern_mode == "oracle":   # oracle mode: pattern_id given
                 if not oracle_positions:
                     return rotary_pos_emb
                 focused_positions = self.core_attention.get_focused_positions_from_oracle_positions(oracle_positions)
 
             # pattern_mode == dynamic: infer from extracted_pattern_id
-            else:
+            elif pattern_mode == "dynamic":
                 if not inference_params.other_kwargs.get("dynamic_pattern_id", None):
                     return rotary_pos_emb
                 dynamic_pattern_id = inference_params.other_kwargs["dynamic_pattern_id"]
@@ -295,6 +295,9 @@ class Attention(MegatronModule, ABC):
                     return rotary_pos_emb
                 dynamic_pattern_id = dynamic_pattern_id[0]
                 focused_positions = self.core_attention.get_focused_positions_from_pattern_id(dynamic_pattern_id)
+            else:  # any other
+                return rotary_pos_emb
+
 
         if focused_positions is None or len(focused_positions.intervals) == 0:  # full attention
             return rotary_pos_emb
@@ -456,7 +459,25 @@ class Attention(MegatronModule, ABC):
             query = torch.cat(new_queries, dim=0)
             # if torch.distributed.get_rank() == 0:
             #     print(f"[R {torch.distributed.get_rank()}] ~~~~EXPERIMENTAL: {intervals}, seq_len: {key.size(0)}, {value.size(0)}, {query.size(0)}\n", end="")
+
+
+        if extra_kwargs["pattern_mode"] == "oracle_mask":
+            oracle_positions = extra_kwargs["oracle_positions"]
+            previous_end = 0
+            new_key = key.detach().clone()
+            for start, end in oracle_positions:
+                new_key[previous_end:start] = -torch.inf
+                previous_end = end
+
+            if previous_end < key.size(0):
+                new_key[previous_end:] = -torch.inf
+            key = new_key
+
+
         # !!!!!!!!!!!!!!!!!!!!!! END OF WARNING: EXPERIMENTAL #########################
+
+
+
 
         # if self.layer_number < 3 and torch.distributed.get_rank() == 0 and extra_kwargs['tokens_generated'] < 5:
         #     print(f"Layer {self.layer_number} Rank 0 Token {extra_kwargs['tokens_generated']}: {query.size(0)}, {key.size(0)}, {value.size(0)}")
@@ -466,6 +487,8 @@ class Attention(MegatronModule, ABC):
         #     q_start_position = key.size(0) - extra_kwargs["tokens_generated"] - 235
         #     print_key(key[q_start_position - 8: q_start_position + 8])
         #     print(f"{q_start_position}.")
+
+
 
         if packed_seq_params is not None:
             query = query.squeeze(1)

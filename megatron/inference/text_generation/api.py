@@ -156,7 +156,7 @@ def generate(model,
         oracle_positions = None
 
     values_int_tensor[0] = distance_between_positions
-    pattern_mode_mapping = ["oracle", "dynamic", "off", "unknown"]
+    pattern_mode_mapping = ["oracle", "dynamic", "off", "oracle_mask", "unknown"]
     if pattern_mode not in pattern_mode_mapping:
         pattern_mode_index = -1  # unknown
     else:

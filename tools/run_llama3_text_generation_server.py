@@ -127,7 +127,7 @@ if __name__ == "__main__":
           "TENSOR MODEL PARALLEL RANK:", mpu.get_tensor_model_parallel_rank())
     if mpu.is_pipeline_first_stage() and mpu.get_tensor_model_parallel_rank() == 0 and mpu.get_data_parallel_rank() == 0:
         server = MegatronServer(model)
-        server.run("0.0.0.0",port=args.port)
+        server.run("0.0.0.0", port=args.port)
 
     while True:
         choice = torch.tensor(1, dtype=torch.long, device='cuda')
